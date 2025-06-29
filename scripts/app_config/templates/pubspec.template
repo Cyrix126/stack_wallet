@@ -114,6 +114,7 @@ dependencies:
     git:
       url: https://github.com/m-berto/flutter_secure_storage
       ref: f076cbb65b075afd6e3b648122987a67306dc298
+      path: flutter_secure_storage
   hive: ^2.0.5
   hive_flutter: ^1.1.0
   path_provider: ^2.0.15
