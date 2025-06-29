@@ -298,6 +298,14 @@ dependency_overrides:
   pinenacl: ^0.6.0
   http: ^0.13.0
 
+  # compatible with jsoncpp 1.9.6
+  flutter_secure_storage_linux:
+    git:
+      url: https://github.com/m-berto/flutter_secure_storage
+      ref: f076cbb65b075afd6e3b648122987a67306dc298
+      path: flutter_secure_storage_linux
+
+
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
 
