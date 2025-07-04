@@ -28,6 +28,8 @@ import 'package:window_size/window_size.dart';
 import 'package:xelis_flutter/src/api/api.dart' as xelis_api;
 import 'package:xelis_flutter/src/api/logger.dart' as xelis_logging;
 import 'package:xelis_flutter/src/frb_generated.dart' as xelis_rust;
+import 'package:coinselect_flutter_ffi/coinselect_flutter_ffi.dart'
+    as coinselect;
 
 import 'app_config.dart';
 import 'db/db_version_migration.dart';
@@ -117,6 +119,7 @@ void startListeningToRustLogs() {
 void main(List<String> args) async {
   // talker.info('initializing Rust lib ...');
   await xelis_rust.RustLib.init();
+  await coinselect.RustLib.init();
   WidgetsFlutterBinding.ensureInitialized();
 
   if (Util.isDesktop && args.length == 2 && args.first == "-d") {
