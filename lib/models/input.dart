@@ -8,17 +8,18 @@
  *
  */
 
-import 'package:coinlib_flutter/coinlib_flutter.dart';
-
+import 'package:coinlib_flutter/coinlib_flutter.dart' as coinlib;
+import 'dart:typed_data';
 import '../db/drift/database.dart';
 import '../utilities/enums/derive_path_type_enum.dart';
+import '../utilities/extensions/impl/string.dart';
 import 'isar/models/isar_models.dart';
 
 abstract class BaseInput {
   BaseInput(this._utxo, {this.key});
 
   final Object _utxo;
-  HDKey? key;
+  coinlib.HDKey? key;
 
   String get id;
 
@@ -28,6 +29,7 @@ abstract class BaseInput {
 
   int? get blockTime;
 
+  int get weight;
   @override
   String toString() {
     return "BaseInput{\n"
@@ -55,6 +57,44 @@ class StandardInput extends BaseInput {
 
   @override
   int? get blockTime => utxo.blockTime;
+
+  @override
+  int get weight {
+    final txid = utxo.txid;
+    final hash = Uint8List.fromList(txid.toUint8ListFromHex.reversed.toList());
+    final prevOutpoint = coinlib.OutPoint(hash, utxo.vout);
+    const sequence = 0xffffffff;
+    final coinlib.Input input;
+
+    switch (derivePathType) {
+      case DerivePathType.bip44:
+      case DerivePathType.bch44:
+        input = coinlib.P2PKHInput(
+          prevOut: prevOutpoint,
+          publicKey: key!.publicKey,
+          sequence: sequence,
+        );
+
+      case DerivePathType.bip49:
+        throw Exception("TODO p2sh");
+
+      case DerivePathType.bip84:
+        input = coinlib.P2WPKHInput(
+          prevOut: prevOutpoint,
+          publicKey: key!.publicKey,
+          sequence: sequence,
+        );
+
+      case DerivePathType.bip86:
+        input = coinlib.TaprootKeyInput(prevOut: prevOutpoint);
+
+      default:
+        throw UnsupportedError(
+          "Unknown derivation path type found: $derivePathType",
+        );
+    }
+    return input.size * 4;
+  }
 
   @override
   String toString() {
@@ -94,6 +134,19 @@ class MwebInput extends BaseInput {
 
   @override
   int? get blockTime => utxo.blockTime < 1 ? null : utxo.blockTime;
+
+  @override
+  int get weight =>
+      coinlib.RawInput(
+        prevOut: coinlib.OutPoint(
+          Uint8List.fromList(
+            utxo.outputId.toUint8ListFromHex.reversed.toList(),
+          ),
+          0,
+        ),
+        scriptSig: Uint8List(0),
+      ).size *
+      4;
 
   @override
   String toString() {

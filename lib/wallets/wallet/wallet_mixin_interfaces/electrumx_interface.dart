@@ -3,6 +3,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:coinlib_flutter/coinlib_flutter.dart' as coinlib;
+import 'package:coinselect_flutter_ffi/coinselect_flutter_ffi.dart';
 import 'package:isar/isar.dart';
 import 'package:meta/meta.dart';
 
@@ -25,6 +26,7 @@ import '../../../utilities/extensions/extensions.dart';
 import '../../../utilities/logger.dart';
 import '../../../utilities/paynym_is_api.dart';
 import '../../crypto_currency/coins/firo.dart';
+import '../../crypto_currency/crypto_currency.dart';
 import '../../crypto_currency/interfaces/electrumx_currency_interface.dart';
 import '../../isar/models/wallet_info.dart';
 import '../../models/tx_data.dart';
@@ -32,6 +34,7 @@ import '../impl/bitcoin_wallet.dart';
 import '../impl/firo_wallet.dart';
 import '../impl/peercoin_wallet.dart';
 import '../intermediate/bip39_hd_wallet.dart';
+import 'coin_selection_interface.dart';
 import 'cpfp_interface.dart';
 import 'mweb_interface.dart';
 import 'paynym_interface.dart';
@@ -116,12 +119,100 @@ mixin ElectrumXInterface<T extends ElectrumXCurrencyInterface>
     return results;
   }
 
+  Future<Address> changeAddress({required TxType txType}) async {
+    if (txType == TxType.mweb || txType == TxType.mwebPegOut) {
+      return (await (this as MwebInterface).getMwebChangeAddress())!;
+    } else {
+      return (await getCurrentChangeAddress())!;
+    }
+  }
+
+  Future<List<BaseInput>> availableOutputsfromWallet({
+    required TxType txType,
+  }) async {
+    final List<BaseInput> availableOutputs;
+
+    if (txType == TxType.mweb || txType == TxType.mwebPegOut) {
+      final db = Drift.get(walletId);
+      final mwebUtxos =
+          await (db.select(db.mwebUtxos)
+            ..where((e) => e.used.equals(false))).get();
+
+      availableOutputs = mwebUtxos.map((e) => MwebInput(e)).toList();
+    } else {
+      availableOutputs =
+          (await mainDB.getUTXOs(walletId).findAll())
+              .map((e) => StandardInput(e))
+              .toList();
+    }
+    return availableOutputs;
+  }
+
+  Future<List<BaseInput>> spendableReadyOutputs({
+    required List<BaseInput> availableOutputs,
+    required bool canCPFP,
+  }) async {
+    final currentChainHeight = await chainHeight;
+    return availableOutputs.where((e) {
+      if (e is StandardInput) {
+        return !e.utxo.isBlocked &&
+            (e.utxo.used != true) &&
+            (canCPFP ||
+                e.utxo.isConfirmed(
+                  currentChainHeight,
+                  cryptoCurrency.minConfirms,
+                  cryptoCurrency.minCoinbaseConfirms,
+                ));
+      } else if (e is MwebInput) {
+        return !e.utxo.blocked && !e.utxo.used;
+      } else {
+        return false;
+      }
+    }).toList();
+  }
+
+  Future<(BigInt, BigInt)> calculateFeeTxSingleAndTwoOutput({
+    required TxData txData,
+    required List<BaseInput> inputsWithKeys,
+  }) async {
+    final baseWeight = await calculateBaseWeightBtc(
+      outputWeight: weightOfOutputs(txData: txData),
+    );
+    final inputsWeight = BigInt.from(
+      inputsWithKeys.map((i) => i.weight).fold(0, (p, c) => p + c),
+    );
+    final satsPerVByte = txData.satsPerVByte;
+    double targetFeeRatePerWeight;
+    if (satsPerVByte != null) {
+      // we want a feeRate sats/Weight
+      targetFeeRatePerWeight = satsPerVByte / 4;
+    } else {
+      // we are dealing with weight, not with bytes, so we divide per 4 and 1K because feeRate is in KB
+      targetFeeRatePerWeight =
+          (txData.feeRateAmount! / BigInt.from(4)).toDouble();
+      targetFeeRatePerWeight = targetFeeRatePerWeight / 1000;
+    }
+    final feeTxOneOutput = await calculateFee(
+      weight: baseWeight + inputsWeight,
+      rate: targetFeeRatePerWeight,
+    );
+    final changeWeight = await weightOfChangeOutput(txData: txData);
+    final feeTxTwoOutput =
+        feeTxOneOutput +
+        await calculateFee(
+          weight: baseWeight + inputsWeight + changeWeight,
+          rate: targetFeeRatePerWeight,
+        );
+    return (feeTxOneOutput, feeTxTwoOutput);
+  }
+
+  /// coinControl: use only utxos manually given with `utxos`
+  /// isSendAll: send all available utxos
+  /// isSendAllCoinControlUtxos: send all manually given utxos
+  /// utxos: manually given utxos for coinControl
   Future<TxData> coinSelection({
     required TxData txData,
-    required bool coinControl,
-    required bool isSendAll,
-    required bool isSendAllCoinControlUtxos,
-    int additionalOutputs = 0,
+    required bool sendAll,
     List<BaseInput>? utxos,
     BigInt? overrideFeeAmount,
   }) async {
@@ -130,90 +221,40 @@ mixin ElectrumXInterface<T extends ElectrumXCurrencyInterface>
     // TODO: multiple recipients one day
     assert(txData.recipients!.length == 1);
 
-    if (coinControl && utxos == null) {
-      throw Exception("Coin control used where utxos is null!");
-    }
+    final coinControl = utxos != null;
 
-    Future<Address> changeAddress() async {
-      if (txData.type == TxType.mweb || txData.type == TxType.mwebPegOut) {
-        return (await (this as MwebInterface).getMwebChangeAddress())!;
-      } else {
-        return (await getCurrentChangeAddress())!;
-      }
-    }
-
-    final recipientAddress = txData.recipients!.first.address;
-    final satoshiAmountToSend = txData.amount!.raw;
-    final int? satsPerVByte = txData.satsPerVByte;
-    final selectedTxFeeRate = txData.feeRateAmount!;
-
+    // gather utxos
     final List<BaseInput> availableOutputs;
-
-    if (txData.type == TxType.mweb || txData.type == TxType.mwebPegOut) {
-      if (utxos == null) {
-        final db = Drift.get(walletId);
-        final mwebUtxos =
-            await (db.select(db.mwebUtxos)
-              ..where((e) => e.used.equals(false))).get();
-
-        availableOutputs = mwebUtxos.map((e) => MwebInput(e)).toList();
-      } else {
-        availableOutputs = utxos;
-      }
+    if (utxos != null) {
+      availableOutputs = utxos;
     } else {
-      availableOutputs =
-          utxos ??
-          (await mainDB.getUTXOs(walletId).findAll())
-              .map((e) => StandardInput(e))
-              .toList();
+      availableOutputs = await availableOutputsfromWallet(txType: txData.type);
     }
 
-    final currentChainHeight = await chainHeight;
-
+    // keep utxos that can be spent
     final canCPFP = this is CpfpInterface && coinControl;
+    final spendableOutputs = await spendableReadyOutputs(
+      availableOutputs: availableOutputs,
+      canCPFP: canCPFP,
+    );
+    // check if manually given utxos for coin control are invalid
+    if (coinControl && spendableOutputs.length < availableOutputs.length) {
+      throw ArgumentError("Attempted to use an unavailable utxo");
+    }
 
-    final spendableOutputs =
-        availableOutputs.where((e) {
-          if (e is StandardInput) {
-            return !e.utxo.isBlocked &&
-                (e.utxo.used != true) &&
-                (canCPFP ||
-                    e.utxo.isConfirmed(
-                      currentChainHeight,
-                      cryptoCurrency.minConfirms,
-                      cryptoCurrency.minCoinbaseConfirms,
-                    ));
-          } else if (e is MwebInput) {
-            return !e.utxo.blocked && !e.utxo.used;
-          } else {
-            return false;
-          }
-        }).toList();
+    // check if enough funds
     final spendableSatoshiValue = spendableOutputs.fold(
       BigInt.zero,
       (p, e) => p + e.value,
     );
 
+    final satoshiAmountToSend = txData.amount!.raw;
+
     if (spendableSatoshiValue < satoshiAmountToSend) {
       throw Exception("Insufficient balance");
-    } else if (spendableSatoshiValue == satoshiAmountToSend &&
-        !isSendAll &&
-        !isSendAllCoinControlUtxos) {
+      // amount to send can be the same as amount available if we want to send all the utxos, we'll deduct a fee from output.
+    } else if (spendableSatoshiValue == satoshiAmountToSend && !sendAll) {
       throw Exception("Insufficient balance to pay transaction fee");
-    }
-
-    if (coinControl) {
-      if (spendableOutputs.length < availableOutputs.length) {
-        throw ArgumentError("Attempted to use an unavailable utxo");
-      }
-      // don't care about sorting if using all utxos
-    } else {
-      // sort spendable by age (oldest first)
-      spendableOutputs.sort(
-        (a, b) => (b.blockTime ?? currentChainHeight).compareTo(
-          (a.blockTime ?? currentChainHeight),
-        ),
-      );
     }
 
     Logging.instance.d("spendableOutputs.length: ${spendableOutputs.length}");
@@ -222,29 +263,42 @@ mixin ElectrumXInterface<T extends ElectrumXCurrencyInterface>
     Logging.instance.d("spendableSatoshiValue: $spendableSatoshiValue");
     Logging.instance.d("satoshiAmountToSend: $satoshiAmountToSend");
 
+    // total amount of utxos that will be used in the tx
     BigInt satoshisBeingUsed = BigInt.zero;
     int inputsBeingConsumed = 0;
     final List<BaseInput> utxoObjectsToUse = [];
 
-    if (!coinControl) {
-      for (
-        var i = 0;
-        satoshisBeingUsed < satoshiAmountToSend && i < spendableOutputs.length;
-        i++
-      ) {
-        utxoObjectsToUse.add(spendableOutputs[i]);
-        satoshisBeingUsed += spendableOutputs[i].value;
-        inputsBeingConsumed += 1;
+    // the selectCoin will run algorithms and select the result with the least waste.
+    // We don't want to use it with coinControl or sendAll
+    if (!coinControl && !sendAll) {
+      final currentChainHeight = await chainHeight;
+      spendableOutputs.sort(
+        (a, b) => (b.blockTime ?? currentChainHeight).compareTo(
+          (a.blockTime ?? currentChainHeight),
+        ),
+      );
+      final coinSelectOpts = await createCoinSelectOpt(
+        txData: txData,
+        utxos: spendableOutputs,
+        network: cryptoCurrency.networkParams,
+        overrideFeeAmount: overrideFeeAmount,
+      );
+      Logging.instance.d("coin selection options: $coinSelectOpts");
+      final outputGroups = await baseInputToOutputGroup(
+        inputs: spendableOutputs,
+        sortedByAge: true,
+      );
+      final selectionResult = await selectCoin(
+        inputs: outputGroups,
+        options: coinSelectOpts,
+      );
+      for (final i in selectionResult.selectedInputs) {
+        utxoObjectsToUse.add(spendableOutputs[i.toInt()]);
       }
-      for (
-        int i = 0;
-        i < additionalOutputs && inputsBeingConsumed < spendableOutputs.length;
-        i++
-      ) {
-        utxoObjectsToUse.add(spendableOutputs[inputsBeingConsumed]);
-        satoshisBeingUsed += spendableOutputs[inputsBeingConsumed].value;
-        inputsBeingConsumed += 1;
-      }
+      satoshisBeingUsed = utxoObjectsToUse
+          .map((i) => i.value)
+          .fold(BigInt.zero, (p, c) => p + c);
+      inputsBeingConsumed = selectionResult.selectedInputs.length;
     } else {
       satoshisBeingUsed = spendableSatoshiValue;
       utxoObjectsToUse.addAll(spendableOutputs);
@@ -255,26 +309,59 @@ mixin ElectrumXInterface<T extends ElectrumXCurrencyInterface>
     Logging.instance.d("inputsBeingConsumed: $inputsBeingConsumed");
     Logging.instance.d('utxoObjectsToUse: $utxoObjectsToUse');
 
-    // numberOfOutputs' length must always be equal to that of recipientsArray and recipientsAmtArray
+    final recipientAddress = txData.recipients!.first.address;
+
     final List<String> recipientsArray = [recipientAddress];
     final List<BigInt> recipientsAmtArray = [satoshiAmountToSend];
 
     // gather required signing data
     final inputsWithKeys = await addSigningKeys(utxoObjectsToUse);
+    // calculation of the required fee for single or two outputs
+    BigInt feeTxOneOutput;
+    BigInt feeTxTwoOutputs;
 
-    if (isSendAll || isSendAllCoinControlUtxos) {
+    if (overrideFeeAmount != null) {
+      (feeTxOneOutput, feeTxTwoOutputs) = (
+        overrideFeeAmount,
+        overrideFeeAmount,
+      );
+    } else {
+      (
+        feeTxOneOutput,
+        feeTxTwoOutputs,
+      ) = await calculateFeeTxSingleAndTwoOutput(
+        txData: txData,
+        inputsWithKeys: inputsWithKeys,
+      );
+    }
+
+    Logging.instance.d("feeForTwoOutputs: $feeTxTwoOutputs");
+    Logging.instance.d("feeForOneOutput: $feeTxOneOutput");
+
+    final difference = satoshisBeingUsed - satoshiAmountToSend;
+
+    TxData? newTx;
+    BigInt feeBeingPaid = BigInt.zero;
+
+    // if send all, fee must be deduced from total value of inputs
+    if (sendAll) {
+      final amount = satoshiAmountToSend - feeTxOneOutput;
+
+      if (amount.isNegative) {
+        throw Exception(
+          "Estimated fee ($feeTxOneOutput sats) is greater than balance!",
+        );
+      }
       if ((overrideFeeAmount ?? BigInt.zero) + satoshiAmountToSend !=
           satoshisBeingUsed) {
         Logging.instance.d("txData.type: ${txData.type}");
-        Logging.instance.d("isSendAll: $isSendAll");
-        Logging.instance.d(
-          "isSendAllCoinControlUtxos: $isSendAllCoinControlUtxos",
-        );
+        Logging.instance.d("isSendAll: $sendAll");
         Logging.instance.d("overrideFeeAmount: $overrideFeeAmount");
         Logging.instance.d("satoshiAmountToSend: $satoshiAmountToSend");
-        Logging.instance.d("satoshisBeingUsed: $satoshisBeingUsed");
+        Logging.instance.d(
+          "satoshisBeingUsed: $satoshisBeingUsed",
+        ); // mweb hack check
 
-        // hack check
         if (!(txData.type == TxType.mwebPegIn ||
             (txData.type == TxType.mweb && overrideFeeAmount != null))) {
           throw Exception(
@@ -283,290 +370,107 @@ mixin ElectrumXInterface<T extends ElectrumXCurrencyInterface>
           );
         }
       }
-      return await _sendAllBuilder(
-        txData: txData,
-        recipientAddress: recipientAddress,
-        satoshisBeingUsed: satoshisBeingUsed,
+
+      newTx = await buildTransaction(
+        txData: txData.copyWith(
+          recipients: await helperRecipientsConvert(
+            [recipientAddress],
+            [amount],
+          ),
+          fee: Amount(
+            rawValue: feeTxOneOutput,
+            fractionDigits: cryptoCurrency.fractionDigits,
+          ),
+          usedUTXOs: inputsWithKeys,
+        ),
         inputsWithKeys: inputsWithKeys,
-        satsPerVByte: satsPerVByte,
-        feeRatePerKB: selectedTxFeeRate,
-        overrideFeeAmount: overrideFeeAmount,
+      );
+      feeBeingPaid = feeTxOneOutput;
+    }
+    // the difference should be enough to pay the fee in each next cases, only the isSendAll does not requires it
+    // if the difference is not enough for single output fee (which have been calculated with manually given rate if any), we stop the tx from happening
+    else if (difference < feeTxOneOutput) {
+      throw Exception(
+        "Estimated fee ($feeTxOneOutput sats) is greater than difference!",
       );
     }
-
-    final int vSizeForOneOutput;
-    try {
-      vSizeForOneOutput =
-          (await buildTransaction(
-            inputsWithKeys: inputsWithKeys,
-            txData: txData.copyWith(
-              recipients: await helperRecipientsConvert(
-                [recipientAddress],
-                [satoshisBeingUsed - BigInt.one],
-              ),
-            ),
-          )).vSize!;
-    } catch (e, s) {
-      Logging.instance.e("vSizeForOneOutput: $e", error: e, stackTrace: s);
-      rethrow;
-    }
-
-    final int vSizeForTwoOutPuts;
-
-    BigInt maxBI(BigInt a, BigInt b) => a > b ? a : b;
-
-    try {
-      vSizeForTwoOutPuts =
-          (await buildTransaction(
-            inputsWithKeys: inputsWithKeys,
-            txData: txData.copyWith(
-              recipients: await helperRecipientsConvert(
-                [recipientAddress, (await changeAddress()).value],
-                [
-                  satoshiAmountToSend,
-                  maxBI(
-                    BigInt.zero,
-                    satoshisBeingUsed - (satoshiAmountToSend + BigInt.one),
-                  ),
-                ],
-              ),
-            ),
-          )).vSize!;
-    } catch (e, s) {
-      Logging.instance.e("vSizeForTwoOutPuts: $e", error: e, stackTrace: s);
-      rethrow;
-    }
-
-    // Assume 1 output, only for recipient and no change
-    final feeForOneOutput =
-        overrideFeeAmount ??
-        BigInt.from(
-          satsPerVByte != null
-              ? (satsPerVByte * vSizeForOneOutput)
-              : estimateTxFee(
-                vSize: vSizeForOneOutput,
-                feeRatePerKB: selectedTxFeeRate,
-              ),
-        );
-    // Assume 2 outputs, one for recipient and one for change
-    final feeForTwoOutputs =
-        overrideFeeAmount ??
-        BigInt.from(
-          satsPerVByte != null
-              ? (satsPerVByte * vSizeForTwoOutPuts)
-              : estimateTxFee(
-                vSize: vSizeForTwoOutPuts,
-                feeRatePerKB: selectedTxFeeRate,
-              ),
-        );
-
-    Logging.instance.d("feeForTwoOutputs: $feeForTwoOutputs");
-    Logging.instance.d("feeForOneOutput: $feeForOneOutput");
-
-    final difference = satoshisBeingUsed - satoshiAmountToSend;
-
-    Future<TxData> singleOutputTxn() async {
+    // construct the tx with one or two outputs
+    // case one output
+    // if the difference is more than the fee but still not enough to create a valid change output, we send the surplus in fee
+    else if (difference >= feeTxOneOutput &&
+        difference <= (feeTxTwoOutputs + cryptoCurrency.dustLimit.raw)) {
+      Logging.instance.d('1 output in tx');
       Logging.instance.d('Input size: $satoshisBeingUsed');
       Logging.instance.d('Recipient output size: $satoshiAmountToSend');
       Logging.instance.d('Fee being paid: $difference sats');
-      Logging.instance.d('Estimated fee: $feeForOneOutput');
-      final txnData = await buildTransaction(
+      Logging.instance.d('Estimated fee: $feeTxOneOutput');
+      newTx = await buildTransaction(
         inputsWithKeys: inputsWithKeys,
         txData: txData.copyWith(
+          fee: Amount(
+            rawValue: feeTxOneOutput,
+            fractionDigits: cryptoCurrency.fractionDigits,
+          ),
+          usedUTXOs: inputsWithKeys,
           recipients: await helperRecipientsConvert(
             recipientsArray,
             recipientsAmtArray,
           ),
         ),
       );
-      return txnData.copyWith(
-        fee: Amount(
-          rawValue: feeForOneOutput,
-          fractionDigits: cryptoCurrency.fractionDigits,
+      feeBeingPaid = feeTxOneOutput;
+    }
+    // change output possible
+    else if (difference > (feeTxTwoOutputs + cryptoCurrency.dustLimit.raw)) {
+      if (!(txData.type == TxType.mweb || txData.type == TxType.mwebPegOut)) {
+        // generate new change address if current change address has been used
+        await checkChangeAddressForTransactions();
+      }
+      final newChangeAddress = await changeAddress(txType: txData.type);
+      final changeOutputAmount = difference - feeTxTwoOutputs;
+
+      // add change output
+      recipientsArray.add(newChangeAddress.value);
+      recipientsAmtArray.add(changeOutputAmount);
+
+      feeBeingPaid = feeTxTwoOutputs;
+      Logging.instance.d('2 outputs in tx');
+      Logging.instance.d('Input size: $satoshisBeingUsed');
+      Logging.instance.d('Recipient output size: $satoshiAmountToSend');
+      Logging.instance.d('Change Output Size: $changeOutputAmount');
+      Logging.instance.d('Difference (fee being paid): $feeBeingPaid sats');
+      Logging.instance.d('Estimated fee: $feeTxTwoOutputs');
+
+      newTx = await buildTransaction(
+        inputsWithKeys: inputsWithKeys,
+        txData: txData.copyWith(
+          recipients: await helperRecipientsConvert(
+            recipientsArray,
+            recipientsAmtArray,
+          ),
+          usedUTXOs: inputsWithKeys,
+          fee: Amount(
+            rawValue: feeTxTwoOutputs,
+            fractionDigits: cryptoCurrency.fractionDigits,
+          ),
         ),
-        usedUTXOs: inputsWithKeys,
       );
     }
 
-    // no change output required
-    if (difference == feeForOneOutput) {
-      Logging.instance.d('1 output in tx');
-      return await singleOutputTxn();
-    } else if (difference < feeForOneOutput) {
-      Logging.instance.w(
-        'Cannot pay tx fee - checking for more outputs and trying again',
-      );
-      // try adding more outputs
-      if (spendableOutputs.length > inputsBeingConsumed) {
-        return coinSelection(
-          txData: txData,
-          isSendAll: isSendAll,
-          additionalOutputs: additionalOutputs + 1,
-          utxos: utxos,
-          coinControl: coinControl,
-          isSendAllCoinControlUtxos: isSendAllCoinControlUtxos,
-        );
-      }
-      throw Exception("Insufficient balance to pay transaction fee");
-    } else {
-      if (difference > (feeForOneOutput + cryptoCurrency.dustLimit.raw)) {
-        final changeOutputSize = difference - feeForTwoOutputs;
-        // check if possible to add the change output
-        if (changeOutputSize > cryptoCurrency.dustLimit.raw &&
-            difference - changeOutputSize == feeForTwoOutputs) {
-          if (!(txData.type == TxType.mweb ||
-              txData.type == TxType.mwebPegOut)) {
-            // generate new change address if current change address has been used
-            await checkChangeAddressForTransactions();
-          }
-          final newChangeAddress = await changeAddress();
-
-          BigInt feeBeingPaid = difference - changeOutputSize;
-
-          // add change output
-          recipientsArray.add(newChangeAddress.value);
-          recipientsAmtArray.add(changeOutputSize);
-
-          Logging.instance.d('2 outputs in tx');
-          Logging.instance.d('Input size: $satoshisBeingUsed');
-          Logging.instance.d('Recipient output size: $satoshiAmountToSend');
-          Logging.instance.d('Change Output Size: $changeOutputSize');
-          Logging.instance.d('Difference (fee being paid): $feeBeingPaid sats');
-          Logging.instance.d('Estimated fee: $feeForTwoOutputs');
-
-          TxData txnData = await buildTransaction(
-            inputsWithKeys: inputsWithKeys,
-            txData: txData.copyWith(
-              recipients: await helperRecipientsConvert(
-                recipientsArray,
-                recipientsAmtArray,
-              ),
-              usedUTXOs: inputsWithKeys,
-            ),
-          );
-
-          // make sure minimum fee is accurate if that is being used
-          if (BigInt.from(txnData.vSize!) - feeBeingPaid == BigInt.one) {
-            final changeOutputSize = difference - BigInt.from(txnData.vSize!);
-            feeBeingPaid = difference - changeOutputSize;
-            recipientsAmtArray.removeLast();
-            recipientsAmtArray.add(changeOutputSize);
-
-            Logging.instance.d('Adjusted Input size: $satoshisBeingUsed');
-            Logging.instance.d(
-              'Adjusted Recipient output size: $satoshiAmountToSend',
-            );
-            Logging.instance.d(
-              'Adjusted Change Output Size: $changeOutputSize',
-            );
-            Logging.instance.d(
-              'Adjusted Difference (fee being paid): $feeBeingPaid sats',
-            );
-            Logging.instance.d('Adjusted Estimated fee: $feeForTwoOutputs');
-
-            txnData = await buildTransaction(
-              inputsWithKeys: inputsWithKeys,
-              txData: txData.copyWith(
-                recipients: await helperRecipientsConvert(
-                  recipientsArray,
-                  recipientsAmtArray,
-                ),
-                usedUTXOs: inputsWithKeys,
-              ),
-            );
-          }
-
-          return txnData.copyWith(
-            fee: Amount(
-              rawValue: feeBeingPaid,
-              fractionDigits: cryptoCurrency.fractionDigits,
-            ),
-            usedUTXOs: inputsWithKeys,
-          );
-        } else {
-          // Something went wrong here. It either overshot or undershot the estimated fee amount or the changeOutputSize
-          // is smaller than or equal to cryptoCurrency.dustLimit. Revert to single output transaction.
-          Logging.instance.d('Reverting to 1 output in tx');
-
-          return await singleOutputTxn();
-        }
-      }
-    }
-
-    return txData;
-  }
-
-  Future<TxData> _sendAllBuilder({
-    required TxData txData,
-    required String recipientAddress,
-    required BigInt satoshisBeingUsed,
-    required List<BaseInput> inputsWithKeys,
-    required int? satsPerVByte,
-    required BigInt feeRatePerKB,
-    BigInt? overrideFeeAmount,
-  }) async {
-    Logging.instance.d("Attempting to send all $cryptoCurrency");
-    if (txData.recipients!.length != 1) {
-      throw Exception("Send all to more than one recipient not yet supported");
-    }
-
-    BigInt feeForOneOutput;
-    if (overrideFeeAmount == null) {
-      final int vSizeForOneOutput =
-          (await buildTransaction(
-            inputsWithKeys: inputsWithKeys,
-            txData: txData.copyWith(
-              recipients: await helperRecipientsConvert(
-                [recipientAddress],
-                [satoshisBeingUsed - BigInt.one],
-              ),
-            ),
-          )).vSize!;
-      feeForOneOutput = BigInt.from(
-        satsPerVByte != null
-            ? (satsPerVByte * vSizeForOneOutput)
-            : estimateTxFee(
-              vSize: vSizeForOneOutput,
-              feeRatePerKB: feeRatePerKB,
-            ),
-      );
-
-      if (satsPerVByte == null) {
-        final roughEstimate =
-            roughFeeEstimate(inputsWithKeys.length, 1, feeRatePerKB).raw;
-        if (feeForOneOutput < roughEstimate) {
-          feeForOneOutput = roughEstimate;
-        }
-      }
-    } else {
-      feeForOneOutput = overrideFeeAmount;
-    }
-
-    final satoshiAmountToSend = satoshisBeingUsed - feeForOneOutput;
-
-    if (satoshiAmountToSend.isNegative) {
+    if (newTx == null) {
       throw Exception(
-        "Estimated fee ($feeForOneOutput sats) is greater than balance!",
+        'No transaction has been constructed, a scenario has not been handled',
+      );
+    }
+    // make sure minimum fee is accurate if that is being used
+    // Can be true only if overrideFeeAmount or custom satsPerVbyte or FeeRate is set too low
+    if (BigInt.from(newTx.vSize!) - feeBeingPaid == BigInt.one) {
+      throw Exception(
+        'Fee being paid has been set very low, tx might be rejected or never confirmed: $feeBeingPaid sats',
       );
     }
 
-    final data = await buildTransaction(
-      txData: txData.copyWith(
-        recipients: await helperRecipientsConvert(
-          [recipientAddress],
-          [satoshiAmountToSend],
-        ),
-      ),
-      inputsWithKeys: inputsWithKeys,
-    );
-
-    return data.copyWith(
-      fee: Amount(
-        rawValue: feeForOneOutput,
-        fractionDigits: cryptoCurrency.fractionDigits,
-      ),
-      usedUTXOs: inputsWithKeys,
-    );
+    return newTx;
   }
 
   Future<List<BaseInput>> addSigningKeys(List<BaseInput> utxosToUse) async {
@@ -1845,94 +1749,84 @@ mixin ElectrumXInterface<T extends ElectrumXCurrencyInterface>
     }
   }
 
+  bool isSendAll({required TxData txData}) {
+    final customSatsPerVByte = txData.satsPerVByte;
+    final balance =
+        txData.type == TxType.mweb || txData.type == TxType.mwebPegOut
+            ? info.cachedBalanceSecondary
+            : info.cachedBalance;
+    final utxos = txData.utxos;
+
+    return (((utxos != null) &&
+            ((txData.amount!.raw ==
+                    utxos
+                        .map((e) => e.value)
+                        .fold(BigInt.zero, (p, e) => p + e)) ||
+                (customSatsPerVByte != null &&
+                    this is CpfpInterface &&
+                    txData.amount ==
+                        (balance.spendable + balance.pendingSpendable)))) ||
+        (customSatsPerVByte != null &&
+            (txData.ignoreCachedBalanceChecks ||
+                txData.amount == balance.spendable)) ||
+        (utxos == null &&
+            customSatsPerVByte == null &&
+            txData.amount == balance.spendable));
+  }
+
+  Future<BigInt> calculatedRate({required TxData txData}) async {
+    final feeRateType = txData.feeRateType;
+    final customSatsPerVByte = txData.satsPerVByte;
+    final feeRateAmount = txData.feeRateAmount;
+
+    if (customSatsPerVByte != null) {
+      return BigInt.from(-1);
+    } else if (feeRateType is FeeRateType || feeRateAmount is BigInt) {
+      if (feeRateType is FeeRateType) {
+        BigInt fee = BigInt.zero;
+        final feeObject = await fees;
+        switch (feeRateType) {
+          case FeeRateType.fast:
+            fee = feeObject.fast;
+            break;
+          case FeeRateType.average:
+            fee = feeObject.medium;
+            break;
+          case FeeRateType.slow:
+            fee = feeObject.slow;
+            break;
+          default:
+            throw ArgumentError("Invalid use of custom fee");
+        }
+        return fee;
+      } else {
+        return feeRateAmount!;
+      }
+    } else {
+      throw ArgumentError("Invalid fee rate argument provided!");
+    }
+  }
+
   @override
   Future<TxData> prepareSend({required TxData txData}) async {
+    Logging.instance.d("Resulting txData sent to prepareSend: $txData");
     try {
       if (txData.amount == null) {
         throw Exception("No recipients in attempted transaction!");
       }
 
-      final balance =
-          txData.type == TxType.mweb || txData.type == TxType.mwebPegOut
-              ? info.cachedBalanceSecondary
-              : info.cachedBalance;
-      final feeRateType = txData.feeRateType;
-      final customSatsPerVByte = txData.satsPerVByte;
-      final feeRateAmount = txData.feeRateAmount;
-      final utxos = txData.utxos;
+      // sendAll allows to substract the required fee from the amount to send
+      final sendAll = isSendAll(txData: txData);
 
-      bool isSendAll = false;
+      final BigInt rate = await calculatedRate(txData: txData);
 
-      final bool coinControl = utxos != null;
+      final result = await coinSelection(
+        txData: txData.copyWith(feeRateAmount: rate),
+        sendAll: sendAll,
+        utxos: txData.utxos?.toList(),
+      );
 
-      final isSendAllCoinControlUtxos =
-          coinControl &&
-          txData.amount!.raw ==
-              utxos.map((e) => e.value).fold(BigInt.zero, (p, e) => p + e);
-
-      final TxData result;
-
-      if (customSatsPerVByte != null) {
-        // check for send all
-        isSendAll = false;
-        if (txData.ignoreCachedBalanceChecks ||
-            txData.amount == balance.spendable) {
-          isSendAll = true;
-        }
-
-        if (coinControl &&
-            this is CpfpInterface &&
-            txData.amount == (balance.spendable + balance.pendingSpendable)) {
-          isSendAll = true;
-        }
-
-        result = await coinSelection(
-          txData: txData.copyWith(feeRateAmount: BigInt.from(-1)),
-          isSendAll: isSendAll,
-          utxos: utxos?.toList(),
-          coinControl: coinControl,
-          isSendAllCoinControlUtxos: isSendAllCoinControlUtxos,
-        );
-      } else if (feeRateType is FeeRateType || feeRateAmount is BigInt) {
-        late final BigInt rate;
-        if (feeRateType is FeeRateType) {
-          BigInt fee = BigInt.zero;
-          final feeObject = await fees;
-          switch (feeRateType) {
-            case FeeRateType.fast:
-              fee = feeObject.fast;
-              break;
-            case FeeRateType.average:
-              fee = feeObject.medium;
-              break;
-            case FeeRateType.slow:
-              fee = feeObject.slow;
-              break;
-            default:
-              throw ArgumentError("Invalid use of custom fee");
-          }
-          rate = fee;
-        } else {
-          rate = feeRateAmount!;
-        }
-
-        // check for send all
-        isSendAll = false;
-        if (txData.amount == balance.spendable) {
-          isSendAll = true;
-        }
-
-        result = await coinSelection(
-          txData: txData.copyWith(feeRateAmount: rate),
-          isSendAll: isSendAll,
-          utxos: utxos?.toList(),
-          coinControl: coinControl,
-          isSendAllCoinControlUtxos: isSendAllCoinControlUtxos,
-        );
-      } else {
-        throw ArgumentError("Invalid fee rate argument provided!");
-      }
-
+      Logging.instance.d("Resulting txData from coinSelection: $result");
       if (result.fee!.raw.toInt() < result.vSize!) {
         throw Exception(
           "Error in fee calculation: Transaction fee (${result.fee!.raw.toInt()}) cannot "
@@ -1948,10 +1842,7 @@ mixin ElectrumXInterface<T extends ElectrumXCurrencyInterface>
           txData: result.copyWith(
             recipients: result.recipients!.where((e) => !(e.isChange)).toList(),
           ),
-          utxos: utxos?.toList(),
-          coinControl: coinControl,
-          isSendAll: isSendAll,
-          isSendAllCoinControlUtxos: isSendAllCoinControlUtxos,
+          sendAll: sendAll,
           overrideFeeAmount: fee.raw,
         );
 

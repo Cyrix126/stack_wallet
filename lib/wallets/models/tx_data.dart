@@ -235,6 +235,21 @@ class TxData {
           ? (fee!.raw ~/ BigInt.from(vSize!)).toInt()
           : null;
 
+  double? get feeRatePerWeight {
+    if (satsPerVByte != null) {
+      satsPerVByte! * 4;
+    }
+    // considering feeRate is KvByte ?
+    if (feeRateAmount != null) {
+      final rate = feeRateAmount! / BigInt.from(1000);
+      return rate * 4;
+    }
+    if (estimatedSatsPerVByte != null) {
+      return estimatedSatsPerVByte! * 4;
+    }
+    return null;
+  }
+
   TxData copyWith({
     FeeRateType? feeRateType,
     BigInt? feeRateAmount,

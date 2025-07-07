@@ -19,6 +19,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
 list(APPEND FLUTTER_FFI_PLUGIN_LIST
   camera_linux
   coinlib_flutter
+  coinselect_flutter_ffi
   flutter_libsparkmobile
   flutter_mwebd
   frostdart

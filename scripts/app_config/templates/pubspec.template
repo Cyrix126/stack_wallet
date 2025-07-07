@@ -29,8 +29,13 @@ dependencies:
 
   xelis_flutter:
     git:
-      url: https://github.com/xelis-project/xelis-flutter-ffi.git
-      ref: v0.1.1
+      url: https://github.com/Cyrix126/xelis-flutter-ffi.git
+      ref: 93fb80434fcfcaf9ed043129785915bfaa5128ae
+      
+  coinselect_flutter_ffi:
+    git:
+      url: https://github.com/Cyrix126/coinselect_flutter_ffi
+      ref: 36f620865fc9846c2061aa5539f2c3a5f883b012
 
   flutter_libsparkmobile:
     git:
