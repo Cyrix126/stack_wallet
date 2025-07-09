@@ -1,6 +1,6 @@
 #!/bin/bash
 LINUX_DIRECTORY=$(pwd)
-JSONCPP_TAG=1.7.4
+JSONCPP_TAG=1.9.6
 LIBSECRET_TAG=0.21.4
 mkdir -p build
 

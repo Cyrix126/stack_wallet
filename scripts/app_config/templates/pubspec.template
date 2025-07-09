@@ -106,7 +106,11 @@ dependencies:
   ethereum_addresses: 1.0.2
 
   # Storage plugins
-  flutter_secure_storage: ^8.0.0
+  flutter_secure_storage:
+    git:
+      url: https://github.com/m-berto/flutter_secure_storage
+      ref: f076cbb65b075afd6e3b648122987a67306dc298
+      path: flutter_secure_storage
   hive: ^2.0.5
   hive_flutter: ^1.1.0
   path_provider: ^2.1.5
@@ -302,6 +306,12 @@ dependency_overrides:
   pinenacl: ^0.6.0
   http: ^0.13.0
 
+  # compatible with jsoncpp 1.9.6
+  flutter_secure_storage_linux:
+    git:
+      url: https://github.com/m-berto/flutter_secure_storage
+      ref: f076cbb65b075afd6e3b648122987a67306dc298
+      path: flutter_secure_storage_linux
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
 
