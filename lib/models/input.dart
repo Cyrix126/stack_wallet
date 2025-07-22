@@ -89,8 +89,9 @@ class StandardInput extends BaseInput {
         input = coinlib.TaprootKeyInput(prevOut: prevOutpoint);
 
       default:
-        throw UnsupportedError(
-          "Unknown derivation path type found: $derivePathType",
+        input = coinlib.RawInput(
+          prevOut: prevOutpoint,
+          scriptSig: Uint8List(0),
         );
     }
     return input.size * 4;
