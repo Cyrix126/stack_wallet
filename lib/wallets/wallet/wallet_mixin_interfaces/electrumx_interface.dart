@@ -222,6 +222,7 @@ mixin ElectrumXInterface<T extends ElectrumXCurrencyInterface>
     assert(txData.recipients!.length == 1);
 
     final coinControl = utxos != null;
+    final satoshiAmountToSend = txData.amount!.raw;
 
     // gather utxos
     final List<BaseInput> availableOutputs;
@@ -241,27 +242,6 @@ mixin ElectrumXInterface<T extends ElectrumXCurrencyInterface>
     if (coinControl && spendableOutputs.length < availableOutputs.length) {
       throw ArgumentError("Attempted to use an unavailable utxo");
     }
-
-    // check if enough funds
-    final spendableSatoshiValue = spendableOutputs.fold(
-      BigInt.zero,
-      (p, e) => p + e.value,
-    );
-
-    final satoshiAmountToSend = txData.amount!.raw;
-
-    if (spendableSatoshiValue < satoshiAmountToSend) {
-      throw Exception("Insufficient balance");
-      // amount to send can be the same as amount available if we want to send all the utxos, we'll deduct a fee from output.
-    } else if (spendableSatoshiValue == satoshiAmountToSend && !sendAll) {
-      throw Exception("Insufficient balance to pay transaction fee");
-    }
-
-    Logging.instance.d("spendableOutputs.length: ${spendableOutputs.length}");
-    Logging.instance.d("availableOutputs.length: ${availableOutputs.length}");
-    Logging.instance.d("spendableOutputs: $spendableOutputs");
-    Logging.instance.d("spendableSatoshiValue: $spendableSatoshiValue");
-    Logging.instance.d("satoshiAmountToSend: $satoshiAmountToSend");
 
     // total amount of utxos that will be used in the tx
     BigInt satoshisBeingUsed = BigInt.zero;
@@ -288,10 +268,25 @@ mixin ElectrumXInterface<T extends ElectrumXCurrencyInterface>
         inputs: spendableOutputs,
         sortedByAge: true,
       );
-      final selectionResult = await selectCoin(
-        inputs: outputGroups,
-        options: coinSelectOpts,
-      );
+      SelectionOutput selectionResult;
+      try {
+        selectionResult = await selectCoin(
+          inputs: outputGroups,
+          options: coinSelectOpts,
+        );
+      } on SelectionError catch (e) {
+        Logging.instance.w("rust-coinselect algorithm returned an error: $e");
+        switch (e) {
+          case SelectionError.insufficientFunds:
+            throw ArgumentError("Insufficient funds");
+          case SelectionError.noSolutionFound:
+            throw ArgumentError(
+              "Could not create transaction with current outputs",
+            );
+          default:
+            throw ArgumentError("Unknown error when selecting outputs");
+        }
+      }
       for (final i in selectionResult.selectedInputs) {
         utxoObjectsToUse.add(spendableOutputs[i.toInt()]);
       }
@@ -300,6 +295,18 @@ mixin ElectrumXInterface<T extends ElectrumXCurrencyInterface>
           .fold(BigInt.zero, (p, c) => p + c);
       inputsBeingConsumed = selectionResult.selectedInputs.length;
     } else {
+      // check if enough funds
+      final spendableSatoshiValue = spendableOutputs.fold(
+        BigInt.zero,
+        (p, e) => p + e.value,
+      );
+
+      if (spendableSatoshiValue < satoshiAmountToSend) {
+        throw Exception("Insufficient balance");
+        // amount to send can be the same as amount available if we want to send all the utxos, we'll deduct a fee from output.
+      } else if (spendableSatoshiValue == satoshiAmountToSend && !sendAll) {
+        throw Exception("Insufficient balance to pay transaction fee");
+      }
       satoshisBeingUsed = spendableSatoshiValue;
       utxoObjectsToUse.addAll(spendableOutputs);
       inputsBeingConsumed = spendableOutputs.length;
