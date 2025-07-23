@@ -35,7 +35,7 @@ dependencies:
   coinselect_flutter_ffi:
     git:
       url: https://github.com/Cyrix126/coinselect_flutter_ffi
-      ref: 194f0027f34c9633c083414b7bcbdd393c14a0f2
+      ref: b52fef9d280cdbe4e8fd948b9cfc4bcdc9dfc59d
 
   flutter_libsparkmobile:
     git:
