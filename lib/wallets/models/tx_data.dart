@@ -237,7 +237,7 @@ class TxData {
 
   double? get feeRatePerWeight {
     if (satsPerVByte != null) {
-      satsPerVByte! * 4;
+      return satsPerVByte! * 4;
     }
     // considering feeRate is KvByte ?
     if (feeRateAmount != null) {
