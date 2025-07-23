@@ -175,6 +175,7 @@ mixin ElectrumXInterface<T extends ElectrumXCurrencyInterface>
     required TxData txData,
     required List<BaseInput> inputsWithKeys,
   }) async {
+    // baseWeight is all the weight minus the inputs, including outputs (except change output since it's not yet in the txData)
     final baseWeight = await calculateBaseWeightBtc(
       outputWeight: weightOfOutputs(txData: txData),
     );
