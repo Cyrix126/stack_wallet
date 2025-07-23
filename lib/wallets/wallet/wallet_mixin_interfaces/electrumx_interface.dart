@@ -280,12 +280,10 @@ mixin ElectrumXInterface<T extends ElectrumXCurrencyInterface>
         switch (e) {
           case SelectionError.insufficientFunds:
             throw ArgumentError("Insufficient funds");
-          case SelectionError.noSolutionFound:
-            throw ArgumentError(
-              "Could not create transaction with current outputs",
-            );
           default:
-            throw ArgumentError("Unknown error when selecting outputs");
+            throw ArgumentError(
+              "Error when selecting outputs. Please report this error to the developers: $e",
+            );
         }
       }
       for (final i in selectionResult.selectedInputs) {
