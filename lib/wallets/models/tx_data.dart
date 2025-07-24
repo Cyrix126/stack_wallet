@@ -235,17 +235,20 @@ class TxData {
           ? (fee!.raw ~/ BigInt.from(vSize!)).toInt()
           : null;
 
+  /// returns the fee rate per wu.
+  /// A WU is a Vbyte * 4, so we divide by 4 the feerate to get
+  /// the same result with weight since a fee amount is rate * size
   double? get feeRatePerWeight {
     if (satsPerVByte != null) {
-      return satsPerVByte! * 4;
+      return satsPerVByte! / 4;
     }
-    // considering feeRate is KvByte ?
+    // feeRateAmount is in KB
     if (feeRateAmount != null) {
       final rate = feeRateAmount! / BigInt.from(1000);
-      return rate * 4;
+      return rate / 4;
     }
     if (estimatedSatsPerVByte != null) {
-      return estimatedSatsPerVByte! * 4;
+      return estimatedSatsPerVByte! / 4;
     }
     return null;
   }
