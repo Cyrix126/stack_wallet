@@ -94,7 +94,8 @@ class StandardInput extends BaseInput {
           scriptSig: Uint8List(0),
         );
     }
-    return input.size * 4;
+
+    return (input.signedSize ?? input.size) * 4;
   }
 
   @override
