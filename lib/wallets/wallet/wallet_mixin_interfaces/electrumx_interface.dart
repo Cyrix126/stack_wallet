@@ -119,6 +119,7 @@ mixin ElectrumXInterface<T extends ElectrumXCurrencyInterface>
     return results;
   }
 
+  /// Retrieve the adress that will be used as the recipient for the change
   Future<Address> changeAddress({required TxType txType}) async {
     if (txType == TxType.mweb || txType == TxType.mwebPegOut) {
       return (await (this as MwebInterface).getMwebChangeAddress())!;
@@ -127,6 +128,7 @@ mixin ElectrumXInterface<T extends ElectrumXCurrencyInterface>
     }
   }
 
+  /// Retrieve UTXOs from wallet
   Future<List<BaseInput>> availableOutputsfromWallet({
     required TxType txType,
   }) async {
@@ -148,6 +150,7 @@ mixin ElectrumXInterface<T extends ElectrumXCurrencyInterface>
     return availableOutputs;
   }
 
+  /// Return inputs that are ready to be used in a new tx
   Future<List<BaseInput>> spendableReadyOutputs({
     required List<BaseInput> availableOutputs,
     required bool canCPFP,
@@ -171,39 +174,45 @@ mixin ElectrumXInterface<T extends ElectrumXCurrencyInterface>
     }).toList();
   }
 
+  /// Returns the fees for a tx with one and a tx for two outputs
+  /// Use dummy values that does not impact weight of built tx
   Future<(BigInt, BigInt)> calculateFeeTxSingleAndTwoOutput({
     required TxData txData,
     required List<BaseInput> inputsWithKeys,
   }) async {
-    // baseWeight is all the weight minus the inputs, including outputs (except change output since it's not yet in the txData)
-    final baseWeight = await calculateBaseWeightBtc(
-      outputWeight: weightOfOutputs(txData: txData),
+    // either custom or fetched, calulated per weight
+    final targetFeeRatePerWeight = txData.feeRatePerWeight!;
+    final weightTxOneOutput =
+        (await buildTransaction(
+          txData: txData.copyWith(
+            recipients: await helperRecipientsConvert(
+              [txData.recipients!.first.address],
+              [BigInt.zero],
+            ),
+          ),
+          inputsWithKeys: inputsWithKeys,
+        )).vSize! *
+        4;
+    final weightTxTwoOutputs =
+        (await buildTransaction(
+          txData: txData.copyWith(
+            recipients: await helperRecipientsConvert(
+              [
+                txData.recipients!.first.address,
+                txData.recipients!.first.address,
+              ],
+              [BigInt.zero, BigInt.zero],
+            ),
+          ),
+          inputsWithKeys: inputsWithKeys,
+        )).vSize! *
+        4;
+    final feeTxOneOutput = BigInt.from(
+      (weightTxOneOutput.toInt() * targetFeeRatePerWeight).ceil(),
     );
-    final inputsWeight = BigInt.from(
-      inputsWithKeys.map((i) => i.weight).fold(0, (p, c) => p + c),
+    final feeTxTwoOutput = BigInt.from(
+      (weightTxTwoOutputs.toInt() * targetFeeRatePerWeight).ceil(),
     );
-    final satsPerVByte = txData.satsPerVByte;
-    double targetFeeRatePerWeight;
-    if (satsPerVByte != null) {
-      // we want a feeRate sats/Weight
-      targetFeeRatePerWeight = satsPerVByte / 4;
-    } else {
-      // we are dealing with weight, not with bytes, so we divide per 4 and 1K because feeRate is in KB
-      targetFeeRatePerWeight =
-          (txData.feeRateAmount! / BigInt.from(4)).toDouble();
-      targetFeeRatePerWeight = targetFeeRatePerWeight / 1000;
-    }
-    final feeTxOneOutput = await calculateFee(
-      weight: baseWeight + inputsWeight,
-      rate: targetFeeRatePerWeight,
-    );
-    final changeWeight = await weightOfChangeOutput(txData: txData);
-    final feeTxTwoOutput =
-        feeTxOneOutput +
-        await calculateFee(
-          weight: baseWeight + inputsWeight + changeWeight,
-          rate: targetFeeRatePerWeight,
-        );
     return (feeTxOneOutput, feeTxTwoOutput);
   }
 
@@ -218,9 +227,10 @@ mixin ElectrumXInterface<T extends ElectrumXCurrencyInterface>
     BigInt? overrideFeeAmount,
   }) async {
     Logging.instance.d("Starting coinSelection ----------");
-
-    // TODO: multiple recipients one day
-    assert(txData.recipients!.length == 1);
+    Logging.instance.d("txData given to coinSelect: $txData");
+    Logging.instance.d("sendAll is $sendAll");
+    Logging.instance.d("coin control UTXOS: $utxos");
+    Logging.instance.d("overrideFeeAmount is $overrideFeeAmount");
 
     final coinControl = utxos != null;
     final satoshiAmountToSend = txData.amount!.raw;
@@ -250,14 +260,29 @@ mixin ElectrumXInterface<T extends ElectrumXCurrencyInterface>
     final List<BaseInput> utxoObjectsToUse = [];
 
     // the selectCoin will run algorithms and select the result with the least waste.
-    // We don't want to use it with coinControl or sendAll
-    if (!coinControl && !sendAll) {
-      final currentChainHeight = await chainHeight;
-      spendableOutputs.sort(
-        (a, b) => (b.blockTime ?? currentChainHeight).compareTo(
-          (a.blockTime ?? currentChainHeight),
-        ),
+    // We don't want to use it with coinControl or sendAll since the selection of inputs is already done
+    if (coinControl || sendAll) {
+      // check if enough funds to cover fee
+      final spendableSatoshiValue = spendableOutputs.fold(
+        BigInt.zero,
+        (p, e) => p + e.value,
       );
+
+      // with selected utxos or sendAll, we expect the value of the total value of utxos to be at least equal to the recipient value
+      if (spendableSatoshiValue < satoshiAmountToSend) {
+        throw Exception("Insufficient balance");
+
+        // amount to send can be the same as amount available. If we want to send all the utxos, we'll deduct a fee from output.
+      } else if (spendableSatoshiValue == satoshiAmountToSend && !sendAll) {
+        throw Exception("Insufficient balance to pay transaction fee");
+      }
+      satoshisBeingUsed = spendableSatoshiValue;
+      utxoObjectsToUse.addAll(spendableOutputs);
+      inputsBeingConsumed = spendableOutputs.length;
+    } else {
+      // Using rust-coinselect algorithms to find the best solution (least waste) to select utxos
+
+      // make options for the algorithms
       final coinSelectOpts = await createCoinSelectOpt(
         txData: txData,
         utxos: spendableOutputs,
@@ -265,11 +290,16 @@ mixin ElectrumXInterface<T extends ElectrumXCurrencyInterface>
         overrideFeeAmount: overrideFeeAmount,
       );
       Logging.instance.d("coin selection options: $coinSelectOpts");
+
+      // convert inputs to OutputGroup
       final outputGroups = await baseInputToOutputGroup(
         inputs: spendableOutputs,
-        sortedByAge: true,
       );
+
       SelectionOutput selectionResult;
+
+      // The selectCoin function can fail, but the only error that could be made by a user is Insufficent funds.
+      // Any other error would be a mistake from the dev
       try {
         selectionResult = await selectCoin(
           inputs: outputGroups,
@@ -281,34 +311,43 @@ mixin ElectrumXInterface<T extends ElectrumXCurrencyInterface>
           case SelectionError.insufficientFunds:
             throw ArgumentError("Insufficient funds");
           default:
+            Logging.instance.d(
+              'targetValue: ${coinSelectOpts.targetValue}\n'
+              'targetFeerate: ${coinSelectOpts.targetFeerate}\n'
+              'longTermFeerate: ${coinSelectOpts.longTermFeerate}\n'
+              'minAbsoluteFee: ${coinSelectOpts.minAbsoluteFee}\n'
+              'baseWeight: ${coinSelectOpts.baseWeight}\n'
+              'changeWeight: ${coinSelectOpts.changeWeight}\n'
+              'changeCost: ${coinSelectOpts.changeCost}\n'
+              'avgInputWeight: ${coinSelectOpts.avgInputWeight}\n'
+              'avgOutputWeight: ${coinSelectOpts.avgOutputWeight}\n'
+              'minChangeValue: ${coinSelectOpts.minChangeValue}\n'
+              'excessStrategy: ${coinSelectOpts.excessStrategy}',
+            );
+            for (final o in outputGroups) {
+              Logging.instance.d(
+                'value: ${o.value}\n weight: ${o.weight}\n sequence: ${o.creationSequence}',
+              );
+            }
             throw ArgumentError(
               "Error when selecting outputs. Please report this error to the developers: $e",
             );
         }
       }
+
+      // the selectCoin function result will return only an index,
+      // so we make a new list from the index and the inputs we gave it.
       for (final i in selectionResult.selectedInputs) {
         utxoObjectsToUse.add(spendableOutputs[i.toInt()]);
       }
+
+      // total amount of sats of selected inputs
       satoshisBeingUsed = utxoObjectsToUse
           .map((i) => i.value)
           .fold(BigInt.zero, (p, c) => p + c);
-      inputsBeingConsumed = selectionResult.selectedInputs.length;
-    } else {
-      // check if enough funds
-      final spendableSatoshiValue = spendableOutputs.fold(
-        BigInt.zero,
-        (p, e) => p + e.value,
-      );
 
-      if (spendableSatoshiValue < satoshiAmountToSend) {
-        throw Exception("Insufficient balance");
-        // amount to send can be the same as amount available if we want to send all the utxos, we'll deduct a fee from output.
-      } else if (spendableSatoshiValue == satoshiAmountToSend && !sendAll) {
-        throw Exception("Insufficient balance to pay transaction fee");
-      }
-      satoshisBeingUsed = spendableSatoshiValue;
-      utxoObjectsToUse.addAll(spendableOutputs);
-      inputsBeingConsumed = spendableOutputs.length;
+      // number of inputs selected for tx
+      inputsBeingConsumed = selectionResult.selectedInputs.length;
     }
 
     Logging.instance.d("satoshisBeingUsed: $satoshisBeingUsed");
@@ -317,15 +356,19 @@ mixin ElectrumXInterface<T extends ElectrumXCurrencyInterface>
 
     final recipientAddress = txData.recipients!.first.address;
 
+    // prepare list of recipients and list of amount to each recipients
+    // TODO: multiple recipient support
     final List<String> recipientsArray = [recipientAddress];
     final List<BigInt> recipientsAmtArray = [satoshiAmountToSend];
 
     // gather required signing data
     final inputsWithKeys = await addSigningKeys(utxoObjectsToUse);
+
     // calculation of the required fee for single or two outputs
     BigInt feeTxOneOutput;
     BigInt feeTxTwoOutputs;
 
+    // mweb specific
     if (overrideFeeAmount != null) {
       (feeTxOneOutput, feeTxTwoOutputs) = (
         overrideFeeAmount,
@@ -369,7 +412,8 @@ mixin ElectrumXInterface<T extends ElectrumXCurrencyInterface>
         ); // mweb hack check
 
         if (!(txData.type == TxType.mwebPegIn ||
-            (txData.type == TxType.mweb && overrideFeeAmount != null))) {
+            ((txData.type == TxType.mweb || txData.type == TxType.mwebPegOut) &&
+                overrideFeeAmount != null))) {
           throw Exception(
             "Something happened that should never actually happen. "
             "Please report this error to the developers.",
@@ -1763,7 +1807,7 @@ mixin ElectrumXInterface<T extends ElectrumXCurrencyInterface>
             : info.cachedBalance;
     final utxos = txData.utxos;
 
-    return (((utxos != null) &&
+    return ((utxos != null) &&
             ((txData.amount!.raw ==
                     utxos
                         .map((e) => e.value)
@@ -1777,7 +1821,7 @@ mixin ElectrumXInterface<T extends ElectrumXCurrencyInterface>
                 txData.amount == balance.spendable)) ||
         (utxos == null &&
             customSatsPerVByte == null &&
-            txData.amount == balance.spendable));
+            txData.amount == balance.spendable);
   }
 
   Future<BigInt> calculatedRate({required TxData txData}) async {
@@ -1833,6 +1877,8 @@ mixin ElectrumXInterface<T extends ElectrumXCurrencyInterface>
       );
 
       Logging.instance.d("Resulting txData from coinSelection: $result");
+
+      // check that fee is not less than 1 sats per vByte
       if (result.fee!.raw.toInt() < result.vSize!) {
         throw Exception(
           "Error in fee calculation: Transaction fee (${result.fee!.raw.toInt()}) cannot "
@@ -1844,10 +1890,17 @@ mixin ElectrumXInterface<T extends ElectrumXCurrencyInterface>
       if (result.type.isMweb()) {
         final fee = await (this as MwebInterface).mwebFee(txData: result);
 
+        // remove change recipient that precendent coinSelection added
+        final recipients =
+            result.recipients!.where((e) => !(e.isChange)).toList();
+
+        /// if all recipients are change, it means the user is sending to his own wallet
+        if (recipients.isEmpty) {
+          throw ArgumentError("Recipient address exists in current wallet");
+        }
+
         TxData mwebData = await coinSelection(
-          txData: result.copyWith(
-            recipients: result.recipients!.where((e) => !(e.isChange)).toList(),
-          ),
+          txData: result.copyWith(recipients: recipients),
           sendAll: sendAll,
           overrideFeeAmount: fee.raw,
         );
