@@ -13,12 +13,15 @@ export 'coin_selection_interface.dart';
 mixin CoinSelectionInterface<T extends CryptoCurrency> on Wallet<T> {}
 
 extension on coinlib.Output {
+  /// returns the weight instead of the size
+  /// size of an output is the same in vSize, we just multiply by 4
   BigInt get weight {
     return BigInt.from(size * 4);
   }
 }
 
 extension CoinSelection on ElectrumXInterface {
+  /// The options for coinSelect needs to incorporate values that are tied to the cryptocurrency used since coinSelect is blockchain agnostic
   Future<coinselect.CoinSelectionOpt> createCoinSelectOpt({
     required TxData txData,
     required List<BaseInput> utxos,
@@ -26,31 +29,50 @@ extension CoinSelection on ElectrumXInterface {
     // for mweb hack, as if it was a custom fee, the algos could make a bad but still valid decision.
     required BigInt? overrideFeeAmount,
   }) async {
+    // the amount for the recipient(s)
     final targetValue = txData.amount!.raw;
-    // sats per Kb to sats per weight
+
+    // the amount of fee per weight
     final targetFeerate = txData.feeRatePerWeight!;
+
+    // long term fee rate is used to calculate the waste
     // feeRatee is per Kb, but we want it per weight
-    var longTermFeeRate = network.feePerKb / BigInt.from(1000);
-    longTermFeeRate = longTermFeeRate * 4;
+    final longTermFeeRate = network.feePerKb / BigInt.from(1000) / 4;
+
+    // the minimum fee
     final minAbsoluteFee = overrideFeeAmount ?? network.minFee;
+
+    // the weight of a change output, which is really the same as any output
     final changeWeight = await weightOfChangeOutput(txData: txData);
-    // needs to adapt to different blockchains ?
-    final baseWeight = await coinselect.calculateBaseWeightBtc(
-      outputWeight: weightOfOutputs(txData: txData) + changeWeight,
-    );
-    // TODO: changeCost should also include the fees to send the output as input, even if example of rust-coinselect doesn't do it
+
+    // baseWeight is the transaction weight without inputs.
+    final baseWeight =
+        BigInt.from(
+          ((await buildTransaction(txData: txData, inputsWithKeys: [])).vSize! *
+              4),
+        ) +
+        changeWeight;
+
+    // changeCost is actually not yet used in rust-coinselect
     final changeCost = await coinselect.calculateFee(
       weight: changeWeight,
       rate: longTermFeeRate,
     );
+
+    // we need to calculate weight of inputs like they are in the final tx
+    final inputsWithSigningKeys = await addSigningKeys(utxos);
     final avgInputWeight = BigInt.from(
-      (weightOfInputs(utxos: utxos) / utxos.length).roundToDouble(),
+      (weightOfInputs(utxos: inputsWithSigningKeys) / utxos.length)
+          .roundToDouble(),
     );
+
     final avgOutputWeight = BigInt.from(
       (weightOfOutputs(txData: txData)) /
           BigInt.from(txData.recipients!.length),
     );
+    // limit above target under which no change will be created (amount under this dust will go to fee)
     final minChangeValue = cryptoCurrency.dustLimit.raw;
+
     return coinselect.CoinSelectionOpt(
       targetValue: targetValue,
       targetFeerate: targetFeerate,
@@ -109,21 +131,24 @@ extension CoinSelection on ElectrumXInterface {
     for (final input in utxos) {
       weightInputs.add(input.weight);
     }
-    return weightInputs.fold(0, (p, c) => p + c);
+    final totalWeight = weightInputs.fold(0, (p, c) => p + c);
+    return totalWeight;
   }
 
+  /// Convert inputs to OutputGroup, type usable by rust-coinselect
+  /// The inputs will be sorted by age, needed by FIFO algorithm
   Future<List<coinselect.OutputGroup>> baseInputToOutputGroup({
     required List<BaseInput> inputs,
-    required bool sortedByAge,
   }) async {
-    final currentChainHeight = await chainHeight;
     // necessary to know the creationSequence for FIFO
+    final currentChainHeight = await chainHeight;
     final inputsSorted = inputs;
     inputsSorted.sort(
       (a, b) => (b.blockTime ?? currentChainHeight).compareTo(
         (a.blockTime ?? currentChainHeight),
       ),
     );
+
     final outputGroups = <coinselect.OutputGroup>[];
 
     var creationSequence = 0;
