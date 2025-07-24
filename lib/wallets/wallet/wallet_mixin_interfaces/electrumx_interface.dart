@@ -193,20 +193,21 @@ mixin ElectrumXInterface<T extends ElectrumXCurrencyInterface>
           inputsWithKeys: inputsWithKeys,
         )).vSize! *
         4;
+    Logging.instance.d("weight of tx with one output: $weightTxOneOutput");
+
+    final changeAddr = await changeAddress(txType: txData.type);
     final weightTxTwoOutputs =
         (await buildTransaction(
           txData: txData.copyWith(
             recipients: await helperRecipientsConvert(
-              [
-                txData.recipients!.first.address,
-                txData.recipients!.first.address,
-              ],
+              [txData.recipients!.first.address, changeAddr.value],
               [BigInt.zero, BigInt.zero],
             ),
           ),
           inputsWithKeys: inputsWithKeys,
         )).vSize! *
         4;
+    Logging.instance.d("weight of tx with two outputs: $weightTxTwoOutputs");
     final feeTxOneOutput = BigInt.from(
       (weightTxOneOutput.toInt() * targetFeeRatePerWeight).ceil(),
     );
