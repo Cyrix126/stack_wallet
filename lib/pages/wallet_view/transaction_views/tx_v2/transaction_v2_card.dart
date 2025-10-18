@@ -21,9 +21,11 @@ import '../../../../utilities/util.dart';
 import '../../../../wallets/crypto_currency/crypto_currency.dart';
 import '../../../../wallets/isar/providers/wallet_info_provider.dart';
 import '../../../../wallets/wallet/wallet_mixin_interfaces/spark_interface.dart';
+import '../../../../widgets/coin_ticker_tag.dart';
+import '../../../../widgets/conditional_parent.dart';
 import '../../../../widgets/desktop/desktop_dialog.dart';
 import '../../sub_widgets/tx_icon.dart';
-import 'transaction_v2_details_view.dart';
+import 'transaction_v2_details_view.dart' as tvd;
 
 class TransactionCardV2 extends ConsumerStatefulWidget {
   const TransactionCardV2({super.key, required this.transaction});
@@ -198,7 +200,7 @@ class _TransactionCardStateV2 extends ConsumerState<TransactionCardV2> {
                     (context) => DesktopDialog(
                       maxHeight: MediaQuery.of(context).size.height - 64,
                       maxWidth: 580,
-                      child: TransactionV2DetailsView(
+                      child: tvd.TransactionV2DetailsView(
                         transaction: _transaction,
                         coin: coin,
                         walletId: walletId,
@@ -208,7 +210,7 @@ class _TransactionCardStateV2 extends ConsumerState<TransactionCardV2> {
             } else {
               unawaited(
                 Navigator.of(context).pushNamed(
-                  TransactionV2DetailsView.routeName,
+                  tvd.TransactionV2DetailsView.routeName,
                   arguments: (tx: _transaction, coin: coin, walletId: walletId),
                 ),
               );
@@ -235,9 +237,28 @@ class _TransactionCardStateV2 extends ConsumerState<TransactionCardV2> {
                           Flexible(
                             child: FittedBox(
                               fit: BoxFit.scaleDown,
-                              child: Text(
-                                whatIsIt(coin, currentHeight),
-                                style: STextStyles.itemSubtitle12(context),
+                              child: ConditionalParent(
+                                condition:
+                                    coin is Firo &&
+                                    _transaction.isInstantLock &&
+                                    !_transaction.isConfirmed(
+                                      currentHeight,
+                                      coin.minConfirms,
+                                      coin.minCoinbaseConfirms,
+                                    ),
+                                builder:
+                                    (child) => Row(
+                                      children: [
+                                        child,
+
+                                        const SizedBox(width: 10),
+                                        const CoinTickerTag(ticker: "INSTANT"),
+                                      ],
+                                    ),
+                                child: Text(
+                                  whatIsIt(coin, currentHeight),
+                                  style: STextStyles.itemSubtitle12(context),
+                                ),
                               ),
                             ),
                           ),

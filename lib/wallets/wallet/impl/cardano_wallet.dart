@@ -6,11 +6,12 @@ import 'package:blockchain_utils/bip/cardano/cip1852/cip1852.dart';
 import 'package:blockchain_utils/bip/cardano/cip1852/conf/cip1852_coins.dart';
 import 'package:blockchain_utils/bip/cardano/mnemonic/cardano_icarus_seed_generator.dart';
 import 'package:blockchain_utils/bip/cardano/shelley/cardano_shelley.dart';
-import 'package:isar/isar.dart';
+import 'package:isar_community/isar.dart';
 import 'package:on_chain/ada/ada.dart';
 import 'package:socks5_proxy/socks.dart';
 import 'package:tuple/tuple.dart';
 
+import '../../../app_config.dart';
 import '../../../exceptions/wallet/node_tor_mismatch_config_exception.dart';
 import '../../../models/balance.dart';
 import '../../../models/isar/models/blockchain_data/address.dart';
@@ -50,11 +51,10 @@ class CardanoWallet extends Bip39Wallet<Cardano> {
     ).change(Bip44Changes.chainExt).addressIndex(0);
     final paymentPublicKey = shelley.bip44.publicKey.compressed;
     final stakePublicKey = shelley.bip44Sk.publicKey.compressed;
-    final addressStr =
-        ADABaseAddress.fromPublicKey(
-          basePubkeyBytes: paymentPublicKey,
-          stakePubkeyBytes: stakePublicKey,
-        ).address;
+    final addressStr = ADABaseAddress.fromPublicKey(
+      basePubkeyBytes: paymentPublicKey,
+      stakePubkeyBytes: stakePublicKey,
+    ).address;
     return Address(
       walletId: walletId,
       value: addressStr,
@@ -202,20 +202,30 @@ class CardanoWallet extends Bip39Wallet<Cardano> {
         address: ADABaseAddress((await getCurrentReceivingAddress())!.value),
         amount: Value(coin: totalBalance - (txData.amount!.raw)),
       );
+
+      final outputAddress = ADAAddress.fromAddress(
+        txData.recipients!.first.address,
+      );
+      if (!(outputAddress is ADABaseAddress ||
+          outputAddress is ADAEnterpriseAddress)) {
+        throw Exception(
+          "Address of type ${outputAddress.runtimeType} currently not supported.",
+        );
+      }
+
       final body = TransactionBody(
-        inputs:
-            listOfUtxosToBeUsed
-                .map(
-                  (e) => TransactionInput(
-                    transactionId: TransactionHash.fromHex(e.txHash),
-                    index: e.outputIndex,
-                  ),
-                )
-                .toList(),
+        inputs: listOfUtxosToBeUsed
+            .map(
+              (e) => TransactionInput(
+                transactionId: TransactionHash.fromHex(e.txHash),
+                index: e.outputIndex,
+              ),
+            )
+            .toList(),
         outputs: [
           change,
           TransactionOutput(
-            address: ADABaseAddress(txData.recipients!.first.address),
+            address: outputAddress,
             amount: Value(coin: txData.amount!.raw - exampleFee),
           ),
         ],
@@ -323,11 +333,22 @@ class CardanoWallet extends Bip39Wallet<Cardano> {
           coin: totalUtxoAmount - (txData.amount!.raw + txData.fee!.raw),
         ),
       );
+
+      final outputAddress = ADAAddress.fromAddress(
+        txData.recipients!.first.address,
+      );
+      if (!(outputAddress is ADABaseAddress ||
+          outputAddress is ADAEnterpriseAddress)) {
+        throw Exception(
+          "Address of type ${outputAddress.runtimeType} currently not supported.",
+        );
+      }
+
       List<TransactionOutput> outputs = [];
       if (totalBalance == (txData.amount!.raw + txData.fee!.raw)) {
         outputs = [
           TransactionOutput(
-            address: ADABaseAddress(txData.recipients!.first.address),
+            address: outputAddress,
             amount: Value(coin: txData.amount!.raw),
           ),
         ];
@@ -335,21 +356,20 @@ class CardanoWallet extends Bip39Wallet<Cardano> {
         outputs = [
           change,
           TransactionOutput(
-            address: ADABaseAddress(txData.recipients!.first.address),
+            address: outputAddress,
             amount: Value(coin: txData.amount!.raw),
           ),
         ];
       }
       final body = TransactionBody(
-        inputs:
-            listOfUtxosToBeUsed
-                .map(
-                  (e) => TransactionInput(
-                    transactionId: TransactionHash.fromHex(e.txHash),
-                    index: e.outputIndex,
-                  ),
-                )
-                .toList(),
+        inputs: listOfUtxosToBeUsed
+            .map(
+              (e) => TransactionInput(
+                transactionId: TransactionHash.fromHex(e.txHash),
+                index: e.outputIndex,
+              ),
+            )
+            .toList(),
         outputs: outputs,
         fee: txData.fee!.raw,
       );
@@ -560,11 +580,10 @@ class CardanoWallet extends Bip39Wallet<Cardano> {
           type: txType,
           subType: isar.TransactionSubType.none,
           amount: amount,
-          amountString:
-              Amount(
-                rawValue: BigInt.from(amount),
-                fractionDigits: cryptoCurrency.fractionDigits,
-              ).toJsonString(),
+          amountString: Amount(
+            rawValue: BigInt.from(amount),
+            fractionDigits: cryptoCurrency.fractionDigits,
+          ).toJsonString(),
           fee: int.parse(txInfo.fees),
           height: txInfo.blockHeight,
           isCancelled: false,
@@ -584,10 +603,9 @@ class CardanoWallet extends Bip39Wallet<Cardano> {
           derivationIndex: 0,
           derivationPath: DerivationPath()..value = _addressDerivationPath,
           type: AddressType.cardanoShelley,
-          subType:
-              txType == isar.TransactionType.outgoing
-                  ? AddressSubType.unknown
-                  : AddressSubType.receiving,
+          subType: txType == isar.TransactionType.outgoing
+              ? AddressSubType.unknown
+              : AddressSubType.receiving,
         );
 
         parsedTxsList.add(Tuple2(transaction, txAddress));
@@ -615,7 +633,7 @@ class CardanoWallet extends Bip39Wallet<Cardano> {
     final currentNode = getCurrentNode();
 
     final client = HttpClient();
-    if (prefs.useTor) {
+    if (AppConfig.hasFeature(AppFeature.tor) && prefs.useTor) {
       final proxyInfo = TorService.sharedInstance.getProxyInfo();
       final proxySettings = ProxySettings(proxyInfo.host, proxyInfo.port);
       SocksTCPClient.assignToHttpClient(client, [proxySettings]);
@@ -645,17 +663,19 @@ class CustomBlockForestProvider extends BlockforestProvider {
     BlockforestRequestParam<T, E> request, [
     Duration? timeout,
   ]) async {
-    if (prefs.useTor) {
-      if (netOption == TorPlainNetworkOption.clear) {
-        throw NodeTorMismatchConfigException(
-          message: "TOR enabled but node set to clearnet only",
-        );
-      }
-    } else {
-      if (netOption == TorPlainNetworkOption.tor) {
-        throw NodeTorMismatchConfigException(
-          message: "TOR off but node set to TOR only",
-        );
+    if (AppConfig.hasFeature(AppFeature.tor)) {
+      if (prefs.useTor) {
+        if (netOption == TorPlainNetworkOption.clear) {
+          throw NodeTorMismatchConfigException(
+            message: "TOR enabled but node set to clearnet only",
+          );
+        }
+      } else {
+        if (netOption == TorPlainNetworkOption.tor) {
+          throw NodeTorMismatchConfigException(
+            message: "TOR off but node set to TOR only",
+          );
+        }
       }
     }
 

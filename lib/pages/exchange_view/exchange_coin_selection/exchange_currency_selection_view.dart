@@ -12,7 +12,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/svg.dart';
-import 'package:isar/isar.dart';
+import 'package:isar_community/isar.dart';
 import 'package:tuple/tuple.dart';
 
 import '../../../app_config.dart';
@@ -100,8 +100,9 @@ class _ExchangeCurrencySelectionViewState
 
   Future<List<AggregateCurrency>> _loadCurrencies() async {
     await ExchangeDataLoadingService.instance.initDB();
+    final isar = await ExchangeDataLoadingService.instance.isar;
     final currencies =
-        await ExchangeDataLoadingService.instance.isar.currencies
+        await isar.currencies
             .where()
             .filter()
             .isFiatEqualTo(false)
