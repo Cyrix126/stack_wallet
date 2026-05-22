@@ -6,7 +6,15 @@ on:
       target_branch:
         description: 'Branch to run against'
         required: true
-        default: 'main'
+        default: 'staging'
+      version:
+        description: 'App version string (e.g. 1.2.3)'
+        required: true
+        default: '2.4.4'
+      build_number:
+        description: 'Build number (integer)'
+        required: true
+        default: '301'
 
 jobs:
 
