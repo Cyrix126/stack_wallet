@@ -16,7 +16,7 @@ jobs:
       contents: read
       packages: read
     container:
-      image: ghcr.io/${{ github.repository_owner }}/stackwallet-ci:latest
+      image: ghcr.io/cypherstack/stackwallet-ci:latest
       credentials:
         username: ${{ github.actor }}
         password: ${{ github.token }}
@@ -93,7 +93,7 @@ jobs:
       contents: read
       packages: read
     container:
-      image: ghcr.io/${{ github.repository_owner }}/stackwallet-ci:latest
+      image: ghcr.io/cypherstack/stackwallet-ci:latest
       credentials:
         username: ${{ github.actor }}
         password: ${{ github.token }}
