@@ -82,6 +82,7 @@ class ConfirmTransactionView extends ConsumerStatefulWidget {
     this.isPaynymNotificationTransaction = false,
     this.isTokenTx = false,
     this.onSuccessInsteadOfRouteOnSuccess,
+    this.onSuccessTxid,
   });
 
   static const String routeName = "/confirmTransactionView";
@@ -95,6 +96,7 @@ class ConfirmTransactionView extends ConsumerStatefulWidget {
   final bool isTokenTx;
   final VoidCallback? onSuccessInsteadOfRouteOnSuccess;
   final VoidCallback onSuccess;
+  final void Function(String txid)? onSuccessTxid;
 
   @override
   ConsumerState<ConfirmTransactionView> createState() =>
@@ -478,6 +480,9 @@ class _ConfirmTransactionViewState
       closeSendingDialog();
 
       widget.onSuccess.call();
+      if (txids.isNotEmpty) {
+        widget.onSuccessTxid?.call(txids.first);
+      }
 
       // Check for 1000 FIRO transparent self-send → prompt MN registration
       bool navigatedToMN = false;

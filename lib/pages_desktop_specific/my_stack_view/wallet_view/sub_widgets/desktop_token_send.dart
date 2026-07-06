@@ -14,10 +14,12 @@ import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:opencryptopay/opencryptopay.dart';
 
 import '../../../../models/isar/models/contact_entry.dart';
 import '../../../../models/paynym/paynym_account_lite.dart';
 import '../../../../models/send_view_auto_fill_data.dart';
+import '../../../../pages/open_crypto_pay/open_crypto_pay_send_handler.dart';
 import '../../../../pages/send_view/confirm_transaction_view.dart';
 import '../../../../pages/send_view/sub_widgets/building_transaction_dialog.dart';
 import '../../../../providers/providers.dart';
@@ -48,6 +50,7 @@ import '../../../../widgets/desktop/secondary_button.dart';
 import '../../../../widgets/eth_fee_form.dart';
 import '../../../../widgets/icon_widgets/addressbook_icon.dart';
 import '../../../../widgets/icon_widgets/clipboard_icon.dart';
+import '../../../../widgets/icon_widgets/qrcode_icon.dart';
 import '../../../../widgets/icon_widgets/x_icon.dart';
 import '../../../../widgets/stack_text_field.dart';
 import '../../../../widgets/textfield_icon_button.dart';
@@ -103,6 +106,18 @@ class _DesktopTokenSendState extends ConsumerState<DesktopTokenSend> {
   late VoidCallback onCryptoAmountChanged;
 
   EthEIP1559Fee? ethFee;
+
+  late final OpenCryptoPaySendHandler _openCryptoPay;
+
+  void _openCryptoPaySetValidAddress(String address) {
+    _address = address;
+    _updatePreviewButtonState(_address, _amountToSend);
+    setState(() {
+      _addressToggleFlag = sendToController.text.isNotEmpty;
+    });
+  }
+
+
 
   Future<void> previewSend() async {
     final tokenWallet = ref.read(pCurrentTokenWallet)!;
@@ -267,6 +282,8 @@ class _DesktopTokenSendState extends ConsumerState<DesktopTokenSend> {
                 txData: txData,
                 walletId: walletId,
                 onSuccess: clearSendForm,
+                onSuccessTxid: (txid) =>
+                    unawaited(_openCryptoPay.submitProof(context, txid)),
                 isTokenTx: true,
                 routeOnSuccessName: DesktopHomeView.routeName,
               ),
@@ -437,6 +454,11 @@ class _DesktopTokenSendState extends ConsumerState<DesktopTokenSend> {
       }
 
       Logging.instance.d("qrResult content: $qrResult");
+
+      if (OpenCryptoPayController.isOpenCryptoPayUri(qrResult)) {
+        unawaited(_openCryptoPay.handle(context, qrResult));
+        return;
+      }
 
       final paymentData = AddressUtils.parsePaymentUri(
         qrResult,
@@ -618,6 +640,17 @@ class _DesktopTokenSendState extends ConsumerState<DesktopTokenSend> {
       _address = _data!.address;
       _addressToggleFlag = true;
     }
+
+    final tokenContract = ref.read(pCurrentTokenWallet)?.tokenContract;
+    _openCryptoPay = OpenCryptoPaySendHandler(
+      ref: ref,
+      coin: coin,
+      sendToController: sendToController,
+      cryptoAmountController: cryptoAmountController,
+      setValidAddress: _openCryptoPaySetValidAddress,
+      isMounted: () => mounted,
+      tokenContract: tokenContract,
+    );
 
     _cryptoFocus.addListener(() {
       if (!_cryptoFocus.hasFocus && !_baseFocus.hasFocus) {
@@ -999,6 +1032,16 @@ class _DesktopTokenSendState extends ConsumerState<DesktopTokenSend> {
                               },
                               child: const AddressBookIcon(),
                             ),
+                            if (sendToController.text.isEmpty)
+                              TextFieldIconButton(
+                                semanticsLabel:
+                                    "Scan QR Button. Opens Camera For Scanning QR Code.",
+                                key: const Key(
+                                  "sendViewScanQrButtonKey",
+                                ),
+                                onTap: scanQr,
+                                child: const QrCodeIcon(),
+                              ),
                         ],
                       ),
                     ),

@@ -16,6 +16,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:opencryptopay/opencryptopay.dart';
 
 import '../../../../models/epic_slatepack_models.dart';
 import '../../../../models/isar/models/blockchain_data/address.dart';
@@ -24,6 +25,7 @@ import '../../../../models/isar/models/contact_entry.dart';
 import '../../../../models/mwc_slatepack_models.dart';
 import '../../../../models/paynym/paynym_account_lite.dart';
 import '../../../../models/send_view_auto_fill_data.dart';
+import '../../../../pages/open_crypto_pay/open_crypto_pay_send_handler.dart';
 import '../../../../pages/send_view/confirm_transaction_view.dart';
 import '../../../../pages/send_view/sub_widgets/building_transaction_dialog.dart';
 import '../../../../pages/send_view/sub_widgets/epic_slatepack_dialog.dart';
@@ -124,6 +126,7 @@ class _DesktopSendState extends ConsumerState<DesktopSend> {
   late final bool hasOptionalMemo;
   late final bool isMimblewimblecoin;
   late final bool isEpiccash;
+  late final OpenCryptoPaySendHandler _openCryptoPay;
 
   String? _note;
   String? _onChainNote;
@@ -771,6 +774,8 @@ class _DesktopSendState extends ConsumerState<DesktopSend> {
                 txData: txData,
                 walletId: walletId,
                 onSuccess: clearSendForm,
+                onSuccessTxid: (txid) =>
+                    unawaited(_openCryptoPay.submitProof(context, txid)),
                 isPaynymTransaction: isPaynymSend,
                 routeOnSuccessName: DesktopHomeView.routeName,
               ),
@@ -921,8 +926,23 @@ class _DesktopSendState extends ConsumerState<DesktopSend> {
   //   return null;
   // }
 
+  void _openCryptoPaySetValidAddress(String address) {
+    _address = address;
+    _setValidAddressProviders(_address);
+    setState(() {
+      _addressToggleFlag = sendToController.text.isNotEmpty;
+    });
+  }
+
+
+
   void _processQrCodeData(String qrCodeData) {
     try {
+      if (OpenCryptoPayController.isOpenCryptoPayUri(qrCodeData)) {
+        unawaited(_openCryptoPay.handle(context, qrCodeData));
+        return;
+      }
+
       final paymentData = AddressUtils.parsePaymentUri(
         qrCodeData,
         logging: Logging.instance,
@@ -1227,7 +1247,6 @@ class _DesktopSendState extends ConsumerState<DesktopSend> {
     });
 
     // _calculateFeesFuture = calculateFees(0);
-    _data = widget.autoFillData;
     walletId = widget.walletId;
     coin = ref.read(pWalletInfo(walletId)).coin;
     clipboard = widget.clipboard;
@@ -1244,14 +1263,28 @@ class _DesktopSendState extends ConsumerState<DesktopSend> {
 
     onCryptoAmountChanged = _cryptoAmountChanged;
     cryptoAmountController.addListener(onCryptoAmountChanged);
+    _openCryptoPay = OpenCryptoPaySendHandler(
+      ref: ref,
+      coin: coin,
+      sendToController: sendToController,
+      cryptoAmountController: cryptoAmountController,
+      setValidAddress: _openCryptoPaySetValidAddress,
+      isMounted: () => mounted,
+    );
+
+    _data = widget.autoFillData;
 
     if (_data != null) {
-      if (_data.amount != null) {
-        cryptoAmountController.text = _data.amount!.toString();
-      }
       sendToController.text = _data.contactLabel;
       _address = _data.address;
       _addressToggleFlag = true;
+      final prefilledAmount = _data.amount;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (prefilledAmount != null && mounted) {
+          cryptoAmountController.text = prefilledAmount.toString();
+        }
+        _setValidAddressProviders(_address);
+      });
     }
 
     if (isPaynymSend) {

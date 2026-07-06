@@ -17,6 +17,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:isar_community/isar.dart';
+import 'package:opencryptopay/opencryptopay.dart';
 import 'package:tuple/tuple.dart';
 
 import '../../models/epic_slatepack_models.dart';
@@ -25,6 +26,7 @@ import '../../models/isar/models/isar_models.dart';
 import '../../models/mwc_slatepack_models.dart';
 import '../../models/paynym/paynym_account_lite.dart';
 import '../../models/send_view_auto_fill_data.dart';
+import '../../pages/open_crypto_pay/open_crypto_pay_send_handler.dart';
 import '../../providers/providers.dart';
 import '../../providers/ui/fee_rate_type_state_provider.dart';
 import '../../providers/ui/preview_tx_button_state_provider.dart';
@@ -101,6 +103,7 @@ class SendView extends ConsumerStatefulWidget {
     this.autoFillData,
     this.clipboard = const ClipboardWrapper(),
     this.accountLite,
+    this.onSendSuccessTxid,
   });
 
   static const String routeName = "/sendView";
@@ -110,6 +113,7 @@ class SendView extends ConsumerStatefulWidget {
   final SendViewAutoFillData? autoFillData;
   final ClipboardInterface clipboard;
   final PaynymAccountLite? accountLite;
+  final void Function(String txid)? onSendSuccessTxid;
 
   @override
   ConsumerState<SendView> createState() => _SendViewState();
@@ -161,6 +165,23 @@ class _SendViewState extends ConsumerState<SendView> {
   late VoidCallback onCryptoAmountChanged;
 
   Set<StandardInput> selectedUTXOs = {};
+  
+  late final OpenCryptoPaySendHandler _openCryptoPay;
+
+  void _openCryptoPaySetValidAddress(String address) {
+    _address = address;
+    _setValidAddressProviders(_address);
+    setState(() {
+      _addressToggleFlag = sendToController.text.isNotEmpty;
+    });
+  }
+
+
+
+  void _onSendSuccessTxid(String txid) {
+    widget.onSendSuccessTxid?.call(txid);
+    unawaited(_openCryptoPay.submitProof(context, txid));
+  }
 
   void _applyUri(PaymentUriData paymentData) {
     try {
@@ -419,6 +440,12 @@ class _SendViewState extends ConsumerState<SendView> {
 
       Logging.instance.d("qrResult content: ${qrResult.rawContent}");
       if (qrResult.rawContent == null) return;
+
+      if (OpenCryptoPayController.isOpenCryptoPayUri(qrResult.rawContent)) {
+        if (!mounted) return;
+        unawaited(_openCryptoPay.handle(context, qrResult.rawContent!));
+        return;
+      }
 
       final paymentData = AddressUtils.parsePaymentUri(
         qrResult.rawContent!,
@@ -1256,6 +1283,7 @@ class _SendViewState extends ConsumerState<SendView> {
                     clearSendForm();
                   }
                 },
+                onSuccessTxid: _onSendSuccessTxid,
               ),
               settings: const RouteSettings(
                 name: ConfirmTransactionView.routeName,
@@ -1448,9 +1476,11 @@ class _SendViewState extends ConsumerState<SendView> {
     isEth = coin is Ethereum;
     hasOptionalMemo = coin is Stellar || coin is Solana;
 
-    _data = widget.autoFillData;
     walletId = widget.walletId;
     clipboard = widget.clipboard;
+
+    _data = widget.autoFillData;
+
     _isMasternodeCollateralUnshield =
         MasternodeCollateralNotes.isUnshield(_data?.note) && isFiro;
     _isMasternodeCollateralSelfSend =
@@ -1493,6 +1523,14 @@ class _SendViewState extends ConsumerState<SendView> {
     onCryptoAmountChanged = _cryptoAmountChanged;
     cryptoAmountController.addListener(onCryptoAmountChanged);
     baseAmountController.addListener(_baseAmountChanged);
+    _openCryptoPay = OpenCryptoPaySendHandler(
+      ref: ref,
+      coin: coin,
+      sendToController: sendToController,
+      cryptoAmountController: cryptoAmountController,
+      setValidAddress: _openCryptoPaySetValidAddress,
+      isMounted: () => mounted,
+    );
 
     if (_data != null) {
       if (_data.amount != null) {

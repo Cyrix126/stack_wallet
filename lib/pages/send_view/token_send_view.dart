@@ -15,9 +15,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:opencryptopay/opencryptopay.dart';
 
 import '../../models/isar/models/isar_models.dart';
 import '../../models/send_view_auto_fill_data.dart';
+import '../../pages/open_crypto_pay/open_crypto_pay_send_handler.dart';
 import '../../providers/providers.dart';
 import '../../providers/ui/fee_rate_type_state_provider.dart';
 import '../../providers/ui/preview_tx_button_state_provider.dart';
@@ -122,6 +124,18 @@ class _TokenSendViewState extends ConsumerState<TokenSendView> {
 
   EthEIP1559Fee? ethFee;
 
+  late final OpenCryptoPaySendHandler _openCryptoPay;
+
+  void _openCryptoPaySetValidAddress(String address) {
+    _address = address;
+    _updatePreviewButtonState(_address, _amountToSend);
+    setState(() {
+      _addressToggleFlag = sendToController.text.isNotEmpty;
+    });
+  }
+
+
+
   void _onTokenSendViewPasteAddressFieldButtonPressed() async {
     final ClipboardData? data = await clipboard.getData(Clipboard.kTextPlain);
     if (data?.text != null && data!.text!.isNotEmpty) {
@@ -164,6 +178,12 @@ class _TokenSendViewState extends ConsumerState<TokenSendView> {
 
       Logging.instance.d("qrResult content: ${qrResult.rawContent}");
       if (qrResult.rawContent == null) return;
+
+      if (OpenCryptoPayController.isOpenCryptoPayUri(qrResult.rawContent)) {
+        if (!mounted) return;
+        unawaited(_openCryptoPay.handle(context, qrResult.rawContent!));
+        return;
+      }
 
       final paymentData = AddressUtils.parsePaymentUri(
         qrResult.rawContent!,
@@ -522,6 +542,8 @@ class _TokenSendViewState extends ConsumerState<TokenSendView> {
                 walletId: walletId,
                 isTokenTx: true,
                 onSuccess: clearSendForm,
+                onSuccessTxid: (txid) =>
+                    unawaited(_openCryptoPay.submitProof(context, txid)),
                 routeOnSuccessName: TokenView.routeName,
               ),
               settings: const RouteSettings(
@@ -615,6 +637,16 @@ class _TokenSendViewState extends ConsumerState<TokenSendView> {
       _address = _data.address.trim();
       _addressToggleFlag = true;
     }
+
+    _openCryptoPay = OpenCryptoPaySendHandler(
+      ref: ref,
+      coin: coin,
+      sendToController: sendToController,
+      cryptoAmountController: cryptoAmountController,
+      setValidAddress: _openCryptoPaySetValidAddress,
+      isMounted: () => mounted,
+      tokenContract: tokenContract,
+    );
 
     super.initState();
   }
