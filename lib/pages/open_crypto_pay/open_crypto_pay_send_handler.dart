@@ -10,6 +10,7 @@
 
 import 'dart:async';
 
+import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:opencryptopay/opencryptopay.dart';
@@ -17,6 +18,7 @@ import 'package:opencryptopay/opencryptopay.dart';
 import '../../models/isar/models/contract.dart';
 import '../../networking/http.dart';
 import '../../notifications/show_flush_bar.dart';
+import '../../providers/providers.dart';
 import '../../providers/ui/preview_tx_button_state_provider.dart';
 import '../../utilities/amount/amount.dart';
 import '../../utilities/amount/amount_formatter.dart';
@@ -25,9 +27,14 @@ import '../../utilities/show_loading.dart';
 import '../../utilities/text_styles.dart';
 import '../../utilities/util.dart';
 import '../../wallets/crypto_currency/crypto_currency.dart';
+import '../../wallets/wallet/wallet.dart';
+import '../../wallets/wallet/impl/ethereum_wallet.dart';
+import '../../wallets/wallet/impl/solana_wallet.dart';
 import '../../widgets/desktop/desktop_dialog.dart';
+import '../../widgets/desktop/desktop_dialog_close_button.dart';
 import '../../widgets/desktop/primary_button.dart';
 import '../../widgets/stack_dialog.dart';
+import 'supported_coins_view.dart';
 
 /// Bridges Stack Wallet's [CryptoCurrency] to opencryptopay package's
 /// [CryptoCoin] interface.
@@ -35,6 +42,7 @@ class CryptoCurrencyAdapter implements CryptoCoin {
   CryptoCurrencyAdapter(
     this.currency, {
     this.tokenSymbol,
+    this.tokenContractAddress,
   });
 
   final CryptoCurrency currency;
@@ -44,12 +52,19 @@ class CryptoCurrencyAdapter implements CryptoCoin {
   /// the token (e.g. "USDT") instead of the chain's native coin (e.g. "ETH").
   final String? tokenSymbol;
 
+  /// The token contract/mint address, used for loading the token icon.
+  /// `null` for native coin wallets.
+  final String? tokenContractAddress;
+
   @override
   String get ticker => tokenSymbol ?? currency.ticker;
 
   @override
   String get prettyName => currency.prettyName;
 
+  /// User-facing name for display in the alternatives dialog: the token
+  /// symbol (e.g. "USDT") when this is a token wallet, otherwise the chain
+  /// name (e.g. "Ethereum").
   @override
   String get displayName => tokenSymbol ?? currency.prettyName;
 }
@@ -61,6 +76,7 @@ class OpenCryptoPaySendHandler {
     required this.sendToController,
     required this.cryptoAmountController,
     required this.setValidAddress,
+    required this.navigateToAlternativeWallet,
     required this.isMounted,
     this.tokenContract,
   });
@@ -70,6 +86,11 @@ class OpenCryptoPaySendHandler {
   final TextEditingController sendToController;
   final TextEditingController cryptoAmountController;
   final void Function(String address) setValidAddress;
+  final Future<void> Function(
+    String walletId,
+    CryptoCurrency coin, {
+    Contract? tokenContract,
+  }) navigateToAlternativeWallet;
   final bool Function() isMounted;
 
   final Contract? tokenContract;
@@ -83,16 +104,67 @@ class OpenCryptoPaySendHandler {
   OpenCryptoPayTransactionDetails? _details;
   String? _method;
 
+  /// Restore a pending proof-of-payment reference carried across wallet
+  /// switches via [openCryptoPayPrefillProvider]. Used by both mobile and
+  /// desktop send views on init.
+  void restorePendingProof(OpenCryptoPaySuccess success) {
+    _details = success.details;
+    _method = success.method;
+  }
+
+  /// Whether a proof submission is pending for the current handler instance.
+  bool get hasPendingProof => _details != null && _method != null;
+
   Future<OpenCryptoPayResult?> _run({
     required BuildContext context,
     required String qrData,
     required CryptoCoin coin,
     required String logLabel,
   }) async {
+    // Token sub-wallets (EthTokenWallet/SolanaTokenWallet) are loaded on
+    // demand into tokenServiceStateProvider and are NOT registered in
+    // pWallets, so iterating the wallets list alone never surfaces tokens.
+    // Enumerate each native wallet's token contracts from its WalletInfo and
+    // emit a CryptoCurrencyAdapter per token alongside the native coin.
+    final mainDB = ref.read(mainDBProvider);
+    final ownedCoins = <CryptoCoin>[];
+    for (final w in ref.read(pWallets).wallets) {
+      ownedCoins.add(CryptoCurrencyAdapter(w.info.coin));
+      if (w is EthereumWallet) {
+        for (final address in w.info.tokenContractAddresses) {
+          final contract = mainDB.getEthContractSync(address);
+          if (contract == null) continue;
+          ownedCoins.add(
+            CryptoCurrencyAdapter(
+              w.info.coin,
+              tokenSymbol: contract.symbol,
+              tokenContractAddress: contract.address,
+            ),
+          );
+        }
+      } else if (w is SolanaWallet) {
+        final mintAddresses = <String>{
+          ...w.info.solanaTokenMintAddresses,
+          ...w.info.solanaCustomTokenMintAddresses,
+        };
+        for (final mint in mintAddresses) {
+          final contract = mainDB.getSolContractSync(mint);
+          if (contract == null) continue;
+          ownedCoins.add(
+            CryptoCurrencyAdapter(
+              w.info.coin,
+              tokenSymbol: contract.symbol,
+              tokenContractAddress: contract.address,
+            ),
+          );
+        }
+      }
+    }
     return showLoading<OpenCryptoPayResult>(
       whileFuture: _controller.run(
         qrData: qrData,
         coin: coin,
+        ownedCoins: ownedCoins,
         onError: (e, s) =>
             Logging.instance.w(logLabel, error: e, stackTrace: s),
       ),
@@ -105,6 +177,7 @@ class OpenCryptoPaySendHandler {
   Future<OpenCryptoPaySuccess?> _showErrorOrSuccess(
     BuildContext context,
     OpenCryptoPayResult result,
+    String qrData,
   ) async {
     switch (result) {
       case OpenCryptoPayNoPending():
@@ -113,12 +186,8 @@ class OpenCryptoPaySendHandler {
           title: OpenCryptoPayStrings.noPendingTitle,
           message: OpenCryptoPayStrings.noPendingMessage,
         );
-      case OpenCryptoPayUnsupported():
-        await _showError(
-          context: context,
-          title: OpenCryptoPayStrings.unsupportedMethodTitle,
-          message: OpenCryptoPayStrings.unsupportedMethod,
-        );
+      case OpenCryptoPayUnsupported(:final alternatives):
+        await _showUnsupported(context, qrData, alternatives!);
       case OpenCryptoPayLightning():
         await _showError(
           context: context,
@@ -152,7 +221,7 @@ class OpenCryptoPaySendHandler {
     if (!isMounted() || result == null) return;
 
     // ignore: use_build_context_synchronously
-    final success = await _showErrorOrSuccess(context, result);
+    final success = await _showErrorOrSuccess(context, result, qrData);
     if (success != null) _applySuccess(success);
   }
 
@@ -180,6 +249,7 @@ class OpenCryptoPaySendHandler {
 
     setValidAddress(address);
   }
+
 
   /// Submit proof of payment (tx hash) to the OpenCryptoPay provider for the
   /// active OpenCryptoPay payment. On failure the pending proof reference is
@@ -276,6 +346,141 @@ class OpenCryptoPaySendHandler {
         }
         return StackOkDialog(title: title, message: message);
       },
+    );
+  }
+
+  /// The provider rejected this wallet's coin. Offer the user one of their
+  /// other wallets: tapping one re-runs the OCP request for that wallet and
+  /// navigates to its send view prefilled.
+  Future<void> _showUnsupported(
+    BuildContext context,
+    String qrData,
+    List<CryptoCoin> alternatives,
+  ) async {
+    if (!isMounted()) return;
+    final hostContext = context;
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        final body = OpenCryptoPaySupportedCoins(
+          coin: CryptoCurrencyAdapter(
+            coin,
+            tokenSymbol: tokenContract?.symbol,
+            tokenContractAddress: tokenContract?.address,
+          ),
+          alternatives: alternatives,
+          onSwitch: (chosenCoin) {
+            Navigator.of(context).pop();
+            unawaited(
+              _switchToAlternativeWallet(hostContext, qrData, chosenCoin),
+            );
+          },
+        );
+        if (Util.isDesktop) {
+          return DesktopDialog(
+            maxWidth: 450,
+            maxHeight: double.infinity,
+            child: Padding(
+              padding: const EdgeInsets.only(left: 32, bottom: 32),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [SizedBox(), DesktopDialogCloseButton()],
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(right: 32),
+                    child: body,
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+        return StackDialogBase(
+          child: Padding(padding: const EdgeInsets.all(24), child: body),
+        );
+      },
+    );
+  }
+
+  Future<void> _switchToAlternativeWallet(
+    BuildContext context,
+    String qrData,
+    CryptoCoin chosenCoin,
+  ) async {
+    final wallets = ref.read(pWallets).wallets;
+    final adapter = chosenCoin as CryptoCurrencyAdapter;
+    final chosenCurrency = adapter.currency;
+    final tokenSymbol = adapter.tokenSymbol;
+    final tokenContractAddress = adapter.tokenContractAddress;
+    final mainDB = ref.read(mainDBProvider);
+
+    // OpenCryptoPay payments are mainnet on-chain transfers; only match
+    // mainnet wallets of the chosen coin.
+    final candidates = wallets.where(
+      (w) =>
+          w.info.coin.mainNetId == chosenCurrency.mainNetId &&
+          w.info.coin.network == chosenCurrency.network,
+    );
+
+    // Token alternatives are matched against the parent wallet that owns the
+    // token contract (token sub-wallets are not in pWallets); native coin
+    // alternatives pick any non-token-holding wallet of that currency.
+    final Wallet? match;
+    final Contract? altTokenContract;
+    if (tokenSymbol != null && tokenContractAddress != null) {
+      Wallet? tokenMatch;
+      Contract? contract;
+      for (final w in candidates) {
+        if (w is EthereumWallet) {
+          if (w.info.tokenContractAddresses.contains(tokenContractAddress)) {
+            tokenMatch = w;
+            contract = mainDB.getEthContractSync(tokenContractAddress);
+            break;
+          }
+        } else if (w is SolanaWallet) {
+          final mints = <String>{
+            ...w.info.solanaTokenMintAddresses,
+            ...w.info.solanaCustomTokenMintAddresses,
+          };
+          if (mints.contains(tokenContractAddress)) {
+            tokenMatch = w;
+            contract = mainDB.getSolContractSync(tokenContractAddress);
+            break;
+          }
+        }
+      }
+      match = tokenMatch;
+      altTokenContract = contract;
+    } else {
+      // Native coin alternative: pick the first wallet of the matching
+      // currency. Candidates are already filtered by mainnet/network.
+      match = candidates.firstOrNull;
+      altTokenContract = null;
+    }
+    if (match == null) return;
+
+    final result = await _run(
+      context: context,
+      qrData: qrData,
+      coin: adapter,
+      logLabel: "OpenCryptoPay failed for alternative wallet",
+    );
+
+    if (!isMounted() || result == null) return;
+
+    // ignore: use_build_context_synchronously
+    final success = await _showErrorOrSuccess(context, result, qrData);
+    if (success == null) return;
+
+    ref.read(openCryptoPayPrefillProvider.notifier).state = success;
+
+    await navigateToAlternativeWallet(
+      match.walletId,
+      match.info.coin,
+      tokenContract: altTokenContract,
     );
   }
 }

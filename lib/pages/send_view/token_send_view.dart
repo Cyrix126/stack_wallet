@@ -16,8 +16,10 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:opencryptopay/opencryptopay.dart';
+import 'package:tuple/tuple.dart';
 
 import '../../models/isar/models/isar_models.dart';
+import '../../models/isar/models/contract.dart';
 import '../../models/send_view_auto_fill_data.dart';
 import '../../pages/open_crypto_pay/open_crypto_pay_send_handler.dart';
 import '../../providers/providers.dart';
@@ -60,6 +62,7 @@ import '../../widgets/textfield_icon_button.dart';
 import '../address_book_views/address_book_view.dart';
 import '../token_view/token_view.dart';
 import 'confirm_transaction_view.dart';
+import 'send_view.dart';
 import 'sub_widgets/building_transaction_dialog.dart';
 import 'sub_widgets/transaction_fee_selection_sheet.dart';
 
@@ -134,7 +137,23 @@ class _TokenSendViewState extends ConsumerState<TokenSendView> {
     });
   }
 
-
+  Future<void> _navigateToAlternativeWallet(
+    String walletId,
+    CryptoCurrency coin, {
+    Contract? tokenContract,
+  }) async {
+    if (tokenContract != null) {
+      await Navigator.of(context).pushNamed(
+        TokenSendView.routeName,
+        arguments: Tuple3(walletId, coin, tokenContract),
+      );
+    } else {
+      await Navigator.of(context).pushNamed(
+        SendView.routeName,
+        arguments: Tuple2(walletId, coin),
+      );
+    }
+  }
 
   void _onTokenSendViewPasteAddressFieldButtonPressed() async {
     final ClipboardData? data = await clipboard.getData(Clipboard.kTextPlain);
@@ -644,6 +663,7 @@ class _TokenSendViewState extends ConsumerState<TokenSendView> {
       sendToController: sendToController,
       cryptoAmountController: cryptoAmountController,
       setValidAddress: _openCryptoPaySetValidAddress,
+      navigateToAlternativeWallet: _navigateToAlternativeWallet,
       isMounted: () => mounted,
       tokenContract: tokenContract,
     );

@@ -17,6 +17,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:opencryptopay/opencryptopay.dart';
 
 import '../../../../models/isar/models/contact_entry.dart';
+import '../../../../models/isar/models/ethereum/eth_contract.dart';
+import '../../../../models/isar/models/solana/sol_contract.dart';
+import '../../../../models/isar/models/contract.dart';
 import '../../../../models/paynym/paynym_account_lite.dart';
 import '../../../../models/send_view_auto_fill_data.dart';
 import '../../../../pages/open_crypto_pay/open_crypto_pay_send_handler.dart';
@@ -38,6 +41,12 @@ import '../../../../utilities/logger.dart';
 import '../../../../utilities/text_styles.dart';
 import '../../../../utilities/util.dart';
 import '../../../../wallets/crypto_currency/crypto_currency.dart';
+import '../../../../wallets/isar/providers/solana/current_sol_token_wallet_provider.dart';
+import '../../../../wallets/wallet/impl/ethereum_wallet.dart';
+import '../../../../wallets/wallet/impl/solana_wallet.dart';
+import '../../../../wallets/wallet/wallet.dart';
+import '../../../../wallets/wallet/impl/sub_wallets/eth_token_wallet.dart';
+import '../../../../wallets/wallet/impl/sub_wallets/solana_token_wallet.dart';
 import '../../../../wallets/isar/providers/eth/current_token_wallet_provider.dart';
 import '../../../../wallets/isar/providers/eth/token_balance_provider.dart';
 import '../../../../wallets/models/tx_data.dart';
@@ -55,6 +64,9 @@ import '../../../../widgets/icon_widgets/x_icon.dart';
 import '../../../../widgets/stack_text_field.dart';
 import '../../../../widgets/textfield_icon_button.dart';
 import '../../../desktop_home_view.dart';
+import '../desktop_token_view.dart';
+import '../desktop_sol_token_view.dart';
+import '../desktop_wallet_view.dart';
 import 'address_book_address_chooser/address_book_address_chooser.dart';
 import 'desktop_send_fee_form.dart';
 
@@ -117,7 +129,53 @@ class _DesktopTokenSendState extends ConsumerState<DesktopTokenSend> {
     });
   }
 
-
+  Future<void> _navigateToAlternativeWallet(
+    String walletId,
+    CryptoCurrency coin, {
+    Contract? tokenContract,
+  }) async {
+    if (tokenContract is EthContract) {
+      final wallet = ref.read(pWallets).getWallet(walletId);
+      final old = ref.read(tokenServiceStateProvider);
+      unawaited(old?.exit());
+      ref.read(tokenServiceStateProvider.state).state =
+          Wallet.loadTokenWallet(
+                ethWallet: wallet as EthereumWallet,
+                contract: tokenContract,
+              )
+              as EthTokenWallet;
+      try {
+        await ref.read(pCurrentTokenWallet)!.init();
+      } catch (_) {
+        return;
+      }
+      await Navigator.of(
+        context,
+      ).pushNamed(DesktopTokenView.routeName, arguments: walletId);
+    } else if (tokenContract is SolContract) {
+      final wallet = ref.read(pWallets).getWallet(walletId);
+      final old = ref.read(solanaTokenServiceStateProvider);
+      unawaited(old?.exit());
+      ref.read(solanaTokenServiceStateProvider.state).state =
+          Wallet.loadSolTokenWallet(
+                solWallet: wallet as SolanaWallet,
+                contract: tokenContract,
+              )
+              as SolanaTokenWallet;
+      try {
+        await ref.read(pCurrentSolanaTokenWallet)!.init();
+      } catch (_) {
+        return;
+      }
+      await Navigator.of(
+        context,
+      ).pushNamed(DesktopSolTokenView.routeName, arguments: walletId);
+    } else {
+      await Navigator.of(
+        context,
+      ).pushNamed(DesktopWalletView.routeName, arguments: walletId);
+    }
+  }
 
   Future<void> previewSend() async {
     final tokenWallet = ref.read(pCurrentTokenWallet)!;
@@ -648,6 +706,7 @@ class _DesktopTokenSendState extends ConsumerState<DesktopTokenSend> {
       sendToController: sendToController,
       cryptoAmountController: cryptoAmountController,
       setValidAddress: _openCryptoPaySetValidAddress,
+      navigateToAlternativeWallet: _navigateToAlternativeWallet,
       isMounted: () => mounted,
       tokenContract: tokenContract,
     );

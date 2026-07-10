@@ -23,6 +23,7 @@ import 'package:tuple/tuple.dart';
 import '../../models/epic_slatepack_models.dart';
 import '../../models/input.dart';
 import '../../models/isar/models/isar_models.dart';
+import '../../models/isar/models/contract.dart';
 import '../../models/mwc_slatepack_models.dart';
 import '../../models/paynym/paynym_account_lite.dart';
 import '../../models/send_view_auto_fill_data.dart';
@@ -89,6 +90,7 @@ import '../address_book_views/address_book_view.dart';
 import '../coin_control/coin_control_view.dart';
 import '../masternodes/masternode_constants.dart';
 import 'confirm_transaction_view.dart';
+import 'token_send_view.dart';
 import 'sub_widgets/building_transaction_dialog.dart';
 import 'sub_widgets/dual_balance_selection_sheet.dart';
 import 'sub_widgets/epic_slatepack_dialog.dart';
@@ -176,7 +178,25 @@ class _SendViewState extends ConsumerState<SendView> {
     });
   }
 
-
+  Future<void> _navigateToAlternativeWallet(
+    String walletId,
+    CryptoCurrency coin, {
+    Contract? tokenContract,
+  }) async {
+    if (tokenContract != null) {
+      await Navigator.of(context).pushNamed(
+        TokenSendView.routeName,
+        arguments: Tuple3(walletId, coin, tokenContract),
+      );
+    } else {
+      await Navigator.of(
+        context,
+      ).pushNamed(
+        SendView.routeName,
+        arguments: Tuple2(walletId, coin),
+      );
+    }
+  }
 
   void _onSendSuccessTxid(String txid) {
     widget.onSendSuccessTxid?.call(txid);
@@ -1479,7 +1499,16 @@ class _SendViewState extends ConsumerState<SendView> {
     walletId = widget.walletId;
     clipboard = widget.clipboard;
 
-    _data = widget.autoFillData;
+    final ocpPrefill = ref.read(openCryptoPayPrefillProvider);
+    if (ocpPrefill != null) {
+      _data = SendViewAutoFillData(
+        address: ocpPrefill.address,
+        contactLabel: ocpPrefill.recipientLabel,
+        amount: ocpPrefill.amount,
+      );
+    } else {
+      _data = widget.autoFillData;
+    }
 
     _isMasternodeCollateralUnshield =
         MasternodeCollateralNotes.isUnshield(_data?.note) && isFiro;
@@ -1529,8 +1558,18 @@ class _SendViewState extends ConsumerState<SendView> {
       sendToController: sendToController,
       cryptoAmountController: cryptoAmountController,
       setValidAddress: _openCryptoPaySetValidAddress,
+      navigateToAlternativeWallet: _navigateToAlternativeWallet,
       isMounted: () => mounted,
     );
+
+    // Restore a pending OpenCryptoPay payment carried across a wallet
+    // switch via the shared prefill provider.
+    if (ocpPrefill != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        ref.read(openCryptoPayPrefillProvider.notifier).state = null;
+      });
+      _openCryptoPay.restorePendingProof(ocpPrefill);
+    }
 
     if (_data != null) {
       if (_data.amount != null) {
