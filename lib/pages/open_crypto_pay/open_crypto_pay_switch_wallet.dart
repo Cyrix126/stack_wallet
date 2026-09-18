@@ -13,23 +13,16 @@ import '../../pages_desktop_specific/my_stack_view/wallet_view/desktop_wallet_vi
 import '../../providers/global/active_wallet_provider.dart';
 import '../../providers/providers.dart';
 import '../../route_generator.dart';
-import '../../utilities/logger.dart';
 import '../../utilities/logout_wallet.dart';
-import '../../utilities/show_loading.dart';
-import '../../utilities/show_node_tor_settings_mismatch.dart';
+import '../../utilities/open_wallet.dart';
 import '../../utilities/util.dart';
 import '../../wallets/crypto_currency/crypto_currency.dart';
-import '../../wallets/isar/providers/eth/current_token_wallet_provider.dart';
-import '../../wallets/isar/providers/solana/current_sol_token_wallet_provider.dart';
 import '../../wallets/wallet/impl/bitcoin_frost_wallet.dart';
 import '../../wallets/wallet/impl/ethereum_wallet.dart';
 import '../../wallets/wallet/impl/solana_wallet.dart';
 import '../../wallets/wallet/impl/sub_wallets/eth_token_wallet.dart';
 import '../../wallets/wallet/impl/sub_wallets/solana_token_wallet.dart';
-import '../../wallets/wallet/intermediate/external_wallet.dart';
 import '../../wallets/wallet/wallet.dart';
-import '../../widgets/desktop/primary_button.dart';
-import '../../widgets/dialogs/basic_dialog.dart';
 import '../home_view/home_view.dart';
 import '../send_view/send_view.dart';
 import '../send_view/sol_token_send_view.dart';
@@ -129,41 +122,18 @@ Future<void> openCryptoPaySwitchWallet(
       ? myStackViewNavKey.currentState!
       : Navigator.of(context);
   final wallet = ref.read(pWallets).getWallet(candidate.walletId);
-  final canContinue = await checkShowNodeTorSettingsMismatch(
-    context: context,
-    currency: wallet.cryptoCurrency,
-    prefs: ref.read(prefsChangeNotifierProvider),
-    nodeService: ref.read(nodeServiceChangeNotifierProvider),
-    allowCancel: true,
-    rootNavigator: Util.isDesktop,
-  );
-  if (!canContinue || !context.mounted) return;
-
-  await showLoading(
-    whileFuture: wallet is ExternalWallet
-        ? wallet.init().then((_) => wallet.open())
-        : wallet.init(),
-    context: context,
-    message: "Opening ${wallet.info.name}",
-    rootNavigator: Util.isDesktop,
-  );
-  if (!context.mounted) return;
+  if (!await openWallet(context, ref, wallet)) return;
 
   final contractAddress = candidate.contractAddress;
   Wallet? tokenWallet;
   if (contractAddress != null) {
-    tokenWallet = await showLoading<Wallet?>(
-      whileFuture: _loadTokenWallet(ref, wallet, contractAddress),
-      context: context,
-      opaqueBG: true,
-      message: "Loading ${candidate.coin.ticker}",
-      rootNavigator: Util.isDesktop,
+    tokenWallet = await loadTokenWallet(
+      context,
+      ref.read,
+      wallet,
+      contractAddress,
     );
-    if (!context.mounted) return;
-    if (tokenWallet == null) {
-      await _showTokenLoadFailed(context);
-      return;
-    }
+    if (tokenWallet == null || !context.mounted) return;
   }
 
   final walletId = candidate.walletId;
@@ -180,7 +150,7 @@ Future<void> openCryptoPaySwitchWallet(
     Util.isDesktop ? DesktopWalletView.routeName : WalletView.routeName,
     walletId,
   );
-  if (tokenWallet != null) _setCurrentTokenWallet(read, tokenWallet);
+  if (tokenWallet != null) setCurrentTokenWallet(read, tokenWallet);
 
   if (Util.isDesktop) {
     if (tokenWallet != null) {
@@ -268,69 +238,4 @@ Future<void> _pushSettled(
     await done.future;
   }
   await WidgetsBinding.instance.endOfFrame;
-}
-
-/// Makes [tokenWallet] the current token wallet and refreshes it.
-void _setCurrentTokenWallet(Reader read, Wallet tokenWallet) {
-  if (tokenWallet is SolanaTokenWallet) {
-    unawaited(read(solanaTokenServiceStateProvider)?.exit());
-    read(solanaTokenServiceStateProvider.state).state = tokenWallet;
-  } else if (tokenWallet is EthTokenWallet) {
-    unawaited(read(tokenServiceStateProvider)?.exit());
-    read(tokenServiceStateProvider.state).state = tokenWallet;
-  }
-  unawaited(tokenWallet.refresh());
-}
-
-Future<void> _showTokenLoadFailed(BuildContext context) => showDialog<void>(
-  barrierDismissible: false,
-  context: context,
-  builder: (context) => BasicDialog(
-    title: "Failed to load token data",
-    desktopHeight: double.infinity,
-    desktopWidth: 450,
-    rightButton: PrimaryButton(
-      label: "OK",
-      onPressed: () => Navigator.of(context).pop(),
-    ),
-  ),
-);
-
-/// Loads and initializes the token wallet. Returns null on failure.
-Future<Wallet?> _loadTokenWallet(
-  WidgetRef ref,
-  Wallet wallet,
-  String contractAddress,
-) async {
-  final db = ref.read(mainDBProvider);
-  try {
-    if (wallet is SolanaWallet) {
-      final contract = db.getSolContractSync(contractAddress);
-      if (contract == null) return null;
-      final tokenWallet = Wallet.loadSolTokenWallet(
-        solWallet: wallet,
-        contract: contract,
-      ) as SolanaTokenWallet;
-      await tokenWallet.init();
-      return tokenWallet;
-    }
-    if (wallet is EthereumWallet) {
-      final contract = db.getEthContractSync(contractAddress);
-      if (contract == null) return null;
-      final tokenWallet = Wallet.loadTokenWallet(
-        ethWallet: wallet,
-        contract: contract,
-      ) as EthTokenWallet;
-      await tokenWallet.init();
-      return tokenWallet;
-    }
-    return null;
-  } catch (e, s) {
-    Logging.instance.e(
-      "Failed to load token wallet for $contractAddress",
-      error: e,
-      stackTrace: s,
-    );
-    return null;
-  }
 }

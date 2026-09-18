@@ -20,13 +20,11 @@ import '../../providers/providers.dart';
 import '../../themes/coin_icon_provider.dart';
 import '../../themes/stack_colors.dart';
 import '../../utilities/amount/amount.dart';
-import '../../utilities/show_loading.dart';
-import '../../utilities/show_node_tor_settings_mismatch.dart';
+import '../../utilities/open_wallet.dart';
 import '../../utilities/text_styles.dart';
 import '../../utilities/util.dart';
 import '../../wallets/crypto_currency/crypto_currency.dart';
 import '../../wallets/isar/providers/all_wallets_info_provider.dart';
-import '../../wallets/wallet/intermediate/external_wallet.dart';
 import '../../widgets/breathing.dart';
 import '../../widgets/conditional_parent.dart';
 import '../../widgets/desktop/desktop_dialog.dart';
@@ -125,33 +123,7 @@ class _DesktopWalletSummaryRowState
               (e) => e.cryptoCurrency.identifier == widget.coin.identifier,
             );
 
-        final canContinue = await checkShowNodeTorSettingsMismatch(
-          context: context,
-          currency: wallet.cryptoCurrency,
-          prefs: ref.read(prefsChangeNotifierProvider),
-          nodeService: ref.read(nodeServiceChangeNotifierProvider),
-          allowCancel: true,
-          rootNavigator: Util.isDesktop,
-        );
-
-        if (!canContinue) {
-          return;
-        }
-
-        final Future<void> loadFuture;
-        if (wallet is ExternalWallet) {
-          loadFuture = wallet.init().then(
-            (value) async => await (wallet).open(),
-          );
-        } else {
-          loadFuture = wallet.init();
-        }
-        await showLoading(
-          whileFuture: loadFuture,
-          context: context,
-          message: 'Opening ${wallet.info.name}',
-          rootNavigator: Util.isDesktop,
-        );
+        if (!await openWallet(context, ref, wallet)) return;
 
         if (mounted) {
           await Navigator.of(

@@ -7,7 +7,6 @@
  *
  */
 
-import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -17,16 +16,10 @@ import '../../../pages_desktop_specific/my_stack_view/wallet_view/desktop_sol_to
 import '../../../providers/providers.dart';
 import '../../../themes/stack_colors.dart';
 import '../../../utilities/constants.dart';
-import '../../../utilities/show_loading.dart';
+import '../../../utilities/open_wallet.dart';
 import '../../../utilities/text_styles.dart';
 import '../../../utilities/util.dart';
-import '../../../wallets/isar/providers/solana/current_sol_token_wallet_provider.dart';
 import '../../../wallets/isar/providers/solana/sol_token_balance_provider.dart';
-import '../../../wallets/wallet/impl/solana_wallet.dart';
-import '../../../wallets/wallet/impl/sub_wallets/solana_token_wallet.dart';
-import '../../../wallets/wallet/wallet.dart';
-import '../../../widgets/desktop/primary_button.dart';
-import '../../../widgets/dialogs/basic_dialog.dart';
 import '../../../widgets/icon_widgets/sol_token_icon.dart';
 import '../../../widgets/rounded_white_container.dart';
 import '../sol_token_view.dart';
@@ -48,87 +41,20 @@ class SolTokenSelectItem extends ConsumerStatefulWidget {
 class _SolTokenSelectItemState extends ConsumerState<SolTokenSelectItem> {
   final bool isDesktop = Util.isDesktop;
 
-  Future<bool> _loadTokenWallet(BuildContext context, WidgetRef ref) async {
-    try {
-      await ref.read(pCurrentSolanaTokenWallet)!.init();
-      return true;
-    } catch (_) {
-      await showDialog<void>(
-        barrierDismissible: false,
-        context: context,
-        builder: (context) => BasicDialog(
-          title: "Failed to load token data",
-          desktopHeight: double.infinity,
-          desktopWidth: 450,
-          rightButton: PrimaryButton(
-            label: "OK",
-            onPressed: () {
-              Navigator.of(context).pop();
-              if (!isDesktop) {
-                Navigator.of(context).pop();
-              }
-            },
-          ),
-        ),
-      );
-      return false;
-    }
-  }
-
   void _onPressed() async {
-    final old = ref.read(solanaTokenServiceStateProvider);
-    // exit previous if there is one
-    unawaited(old?.exit());
-
-    // Get the parent Solana wallet.
-    final solanaWallet =
-        ref.read(pWallets).getWallet(widget.walletId) as SolanaWallet?;
-    if (solanaWallet == null) {
-      if (mounted) {
-        await showDialog<void>(
-          barrierDismissible: false,
-          context: context,
-          builder: (context) => BasicDialog(
-            title: "Error: Parent Solana wallet not found",
-            desktopHeight: double.infinity,
-            desktopWidth: 450,
-            rightButton: PrimaryButton(
-              label: "OK",
-              onPressed: () {
-                Navigator.of(context).pop();
-              },
-            ),
-          ),
-        );
-      }
-      return;
-    }
-
-    ref.read(solanaTokenServiceStateProvider.state).state =
-        Wallet.loadSolTokenWallet(
-              solWallet: solanaWallet,
-              contract: widget.token,
-            )
-            as SolanaTokenWallet;
-
-    final success = await showLoading<bool>(
-      whileFuture: _loadTokenWallet(context, ref),
-      context: context,
-      rootNavigator: isDesktop,
-      message: "Loading ${widget.token.name}",
+    final wallet = ref.read(pWallets).getWallet(widget.walletId);
+    final tokenWallet = await loadTokenWallet(
+      context,
+      ref.read,
+      wallet,
+      widget.token.address,
     );
-
-    if (!success!) {
-      return;
-    }
-
-    if (mounted) {
-      unawaited(ref.read(pCurrentSolanaTokenWallet)!.refresh());
-      await Navigator.of(context).pushNamed(
-        isDesktop ? DesktopSolTokenView.routeName : SolTokenView.routeName,
-        arguments: widget.walletId,
-      );
-    }
+    if (tokenWallet == null || !mounted) return;
+    setCurrentTokenWallet(ref.read, tokenWallet);
+    await Navigator.of(context).pushNamed(
+      isDesktop ? DesktopSolTokenView.routeName : SolTokenView.routeName,
+      arguments: widget.walletId,
+    );
   }
 
   @override

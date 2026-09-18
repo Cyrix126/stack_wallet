@@ -24,10 +24,8 @@ import '../../models/isar/exchange_cache/currency.dart';
 import '../../notifications/show_flush_bar.dart';
 import '../../pages_desktop_specific/spark_coins/spark_coins_view.dart';
 import '../../providers/global/active_wallet_provider.dart';
-import '../../providers/global/auto_swb_service_provider.dart';
 import '../../providers/global/paynym_api_provider.dart';
 import '../../providers/providers.dart';
-import '../../providers/ui/transaction_filter_provider.dart';
 import '../../providers/ui/unread_notifications_provider.dart';
 import '../../providers/wallet/my_paynym_account_state_provider.dart';
 import '../../services/event_bus/events/global/node_connection_status_changed_event.dart';
@@ -41,9 +39,8 @@ import '../../utilities/amount/amount.dart';
 import '../../utilities/assets.dart';
 import '../../utilities/clipboard_interface.dart';
 import '../../utilities/constants.dart';
-import '../../utilities/enums/backup_frequency_type.dart';
-import '../../utilities/enums/sync_type_enum.dart';
 import '../../utilities/logger.dart';
+import '../../utilities/logout_wallet.dart';
 import '../../utilities/show_loading.dart';
 import '../../utilities/text_styles.dart';
 import '../../wallets/crypto_currency/crypto_currency.dart';
@@ -277,39 +274,8 @@ class _WalletViewState extends ConsumerState<WalletView> {
     // return false;
   }
 
-  void _logout() async {
-    // if (_shouldDisableAutoSyncOnLogOut) {
-    //   // disable auto sync if it was enabled only when loading wallet
-    ref.read(pWallets).getWallet(walletId).shouldAutoSync = false;
-    // }
-
-    ref.read(currentWalletIdProvider.notifier).state = null;
-    ref.read(transactionFilterProvider.state).state = null;
-    if (ref.read(prefsChangeNotifierProvider).isAutoBackupEnabled &&
-        ref.read(prefsChangeNotifierProvider).backupFrequencyType ==
-            BackupFrequencyType.afterClosingAWallet) {
-      unawaited(ref.read(autoSWBServiceProvider).doBackup());
-    }
-
-    // Close the wallet according to syncing preferences.
-    switch (ref.read(prefsChangeNotifierProvider).syncType) {
-      case SyncingType.currentWalletOnly:
-        // Close the wallet.
-        unawaited(ref.watch(pWallets).getWallet(walletId).exit());
-      // unawaited so we don't lag the UI.
-      case SyncingType.selectedWalletsAtStartup:
-        // Close if this wallet is not in the list to be synced.
-        if (!ref
-            .read(prefsChangeNotifierProvider)
-            .walletIdsSyncOnStartup
-            .contains(widget.walletId)) {
-          unawaited(ref.watch(pWallets).getWallet(walletId).exit());
-          // unawaited so we don't lag the UI.
-        }
-      case SyncingType.allWalletsOnStartup:
-        // Do nothing.
-        break;
-    }
+  void _logout() {
+    logoutWallet(ref, ref.read(pWallets).getWallet(walletId));
   }
 
   Widget _buildNetworkIcon(WalletSyncStatus status) {

@@ -8,7 +8,6 @@
  *
  */
 
-import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -20,18 +19,12 @@ import '../../../services/ethereum/cached_eth_token_balance.dart';
 import '../../../themes/stack_colors.dart';
 import '../../../utilities/amount/amount_formatter.dart';
 import '../../../utilities/constants.dart';
-import '../../../utilities/show_loading.dart';
+import '../../../utilities/open_wallet.dart';
 import '../../../utilities/text_styles.dart';
 import '../../../utilities/util.dart';
 import '../../../wallets/crypto_currency/crypto_currency.dart';
-import '../../../wallets/isar/providers/eth/current_token_wallet_provider.dart';
 import '../../../wallets/isar/providers/eth/token_balance_provider.dart';
 import '../../../wallets/isar/providers/wallet_info_provider.dart';
-import '../../../wallets/wallet/impl/ethereum_wallet.dart';
-import '../../../wallets/wallet/impl/sub_wallets/eth_token_wallet.dart';
-import '../../../wallets/wallet/wallet.dart';
-import '../../../widgets/desktop/primary_button.dart';
-import '../../../widgets/dialogs/basic_dialog.dart';
 import '../../../widgets/icon_widgets/eth_token_icon.dart';
 import '../../../widgets/rounded_white_container.dart';
 import '../token_view.dart';
@@ -55,64 +48,20 @@ class _MyTokenSelectItemState extends ConsumerState<MyTokenSelectItem> {
 
   late final CachedEthTokenBalance cachedBalance;
 
-  Future<bool> _loadTokenWallet(BuildContext context, WidgetRef ref) async {
-    try {
-      await ref.read(pCurrentTokenWallet)!.init();
-      return true;
-    } catch (_) {
-      await showDialog<void>(
-        barrierDismissible: false,
-        context: context,
-        builder: (context) => BasicDialog(
-          title: "Failed to load token data",
-          desktopHeight: double.infinity,
-          desktopWidth: 450,
-          rightButton: PrimaryButton(
-            label: "OK",
-            onPressed: () {
-              Navigator.of(context).pop();
-              if (!isDesktop) {
-                Navigator.of(context).pop();
-              }
-            },
-          ),
-        ),
-      );
-      return false;
-    }
-  }
-
   void _onPressed() async {
-    final old = ref.read(tokenServiceStateProvider);
-    // exit previous if there is one
-    unawaited(old?.exit());
-    ref.read(tokenServiceStateProvider.state).state =
-        Wallet.loadTokenWallet(
-              ethWallet:
-                  ref.read(pWallets).getWallet(widget.walletId)
-                      as EthereumWallet,
-              contract: widget.token,
-            )
-            as EthTokenWallet;
-
-    final success = await showLoading<bool>(
-      whileFuture: _loadTokenWallet(context, ref),
-      context: context,
-      rootNavigator: isDesktop,
-      message: "Loading ${widget.token.name}",
+    final wallet = ref.read(pWallets).getWallet(widget.walletId);
+    final tokenWallet = await loadTokenWallet(
+      context,
+      ref.read,
+      wallet,
+      widget.token.address,
     );
-
-    if (!success!) {
-      return;
-    }
-
-    if (mounted) {
-      unawaited(ref.read(pCurrentTokenWallet)!.refresh());
-      await Navigator.of(context).pushNamed(
-        isDesktop ? DesktopTokenView.routeName : TokenView.routeName,
-        arguments: widget.walletId,
-      );
-    }
+    if (tokenWallet == null || !mounted) return;
+    setCurrentTokenWallet(ref.read, tokenWallet);
+    await Navigator.of(context).pushNamed(
+      isDesktop ? DesktopTokenView.routeName : TokenView.routeName,
+      arguments: widget.walletId,
+    );
   }
 
   @override
