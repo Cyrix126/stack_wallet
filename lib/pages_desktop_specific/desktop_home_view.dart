@@ -39,6 +39,9 @@ import 'settings/desktop_settings_view.dart';
 import 'settings/settings_menu/desktop_about_view.dart';
 import 'settings/settings_menu/desktop_support_view.dart';
 
+/// The navigator hosting the My Stack views.
+final myStackViewNavKey = GlobalKey<NavigatorState>();
+
 class DesktopHomeView extends ConsumerStatefulWidget {
   const DesktopHomeView({super.key});
 
@@ -49,7 +52,6 @@ class DesktopHomeView extends ConsumerStatefulWidget {
 }
 
 class _DesktopHomeViewState extends ConsumerState<DesktopHomeView> {
-  final GlobalKey myStackViewNavKey = GlobalKey<NavigatorState>();
   late final Navigator myStackViewNav;
   IdleMonitor? _idleMonitor;
 
@@ -171,9 +173,8 @@ class _DesktopHomeViewState extends ConsumerState<DesktopHomeView> {
     if (ref.read(prevDesktopMenuItemProvider.state).state ==
             DesktopMenuItemId.myStack &&
         ref.read(prevDesktopMenuItemProvider.state).state == newKey) {
-      Navigator.of(
-        myStackViewNavKey.currentContext!,
-      ).popUntil(ModalRoute.withName(MyStackView.routeName));
+      Navigator.of(myStackViewNavKey.currentContext!)
+          .popUntil(ModalRoute.withName(MyStackView.routeName));
       if (ref.read(currentWalletIdProvider.state).state != null) {
         final wallet = ref
             .read(pWallets)

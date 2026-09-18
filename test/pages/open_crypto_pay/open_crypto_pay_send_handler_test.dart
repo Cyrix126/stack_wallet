@@ -11,8 +11,11 @@ import 'package:stackwallet/models/isar/stack_theme.dart';
 import 'package:stackwallet/models/paymint/fee_object_model.dart';
 import 'package:stackwallet/pages/open_crypto_pay/open_crypto_pay_send_fee.dart';
 import 'package:stackwallet/pages/open_crypto_pay/open_crypto_pay_send_handler.dart';
+import 'package:stackwallet/pages/open_crypto_pay/open_crypto_pay_switch_wallet.dart';
 import 'package:stackwallet/providers/ui/preview_tx_button_state_provider.dart';
+import 'package:stackwallet/themes/coin_icon_provider.dart';
 import 'package:stackwallet/themes/stack_colors.dart';
+import 'package:stackwallet/themes/theme_providers.dart';
 import 'package:stackwallet/themes/theme_service.dart';
 import 'package:stackwallet/utilities/amount/amount.dart';
 import 'package:stackwallet/utilities/amount/amount_formatter.dart';
@@ -129,6 +132,7 @@ String _pastExpiration() => "2000-01-01T00:00:00.000Z";
 MockClient _mockOcpServer({
   required Map<String, dynamic> paymentInfo,
   Map<String, dynamic>? txDetails,
+  Map<String, Map<String, dynamic>>? txDetailsByAsset,
   int paymentInfoStatus = 200,
   int proofStatus = 200,
   bool proofUnreachable = false,
@@ -144,8 +148,8 @@ MockClient _mockOcpServer({
         proofStatus,
       );
     }
-    if (request.url.queryParameters.containsKey('method')) {
-      return Response(jsonEncode(txDetails), 200);
+    if (request.url.queryParameters case {'method': _, 'asset': final asset}) {
+      return Response(jsonEncode(txDetailsByAsset?[asset] ?? txDetails), 200);
     }
     return Response(jsonEncode(paymentInfo), paymentInfoStatus);
   });
@@ -268,6 +272,13 @@ Future<_Harness> _pumpHarness(WidgetTester tester) async {
     ProviderScope(
       overrides: [
         pThemeService.overrideWithValue(_FakeThemeService()),
+        // Wallet rows draw the coin icon from the theme assets on disk.
+        coinIconProvider.overrideWithProvider(
+          (coin) => Provider<String>((_) => "assets/svg/circle-check.svg"),
+        ),
+        pCoinColor.overrideWithProvider(
+          (coin) => StateProvider<Color>((_) => Colors.orange),
+        ),
         pAmountFormatter.overrideWithProvider(
           (coin) => Provider<AmountFormatter>(
             (ref) => AmountFormatter(
@@ -318,6 +329,8 @@ _HandlerSetup _makeHandler({
   String? tokenSymbol,
   int? tokenDecimals,
   String? tokenContractAddress,
+  List<OpenCryptoPayCandidate> candidates = const [],
+  List<(OpenCryptoPayCandidate, OpenCryptoPaySuccess)>? switches,
 }) {
   final sendTo = TextEditingController();
   final amount = TextEditingController();
@@ -335,6 +348,11 @@ _HandlerSetup _makeHandler({
     tokenSymbol: tokenSymbol,
     tokenDecimals: tokenDecimals,
     tokenContractAddress: tokenContractAddress,
+    candidates: () => candidates,
+    switchWallet: switches == null
+        ? null
+        : (context, candidate, payment) async =>
+              switches.add((candidate, payment)),
     controller: OpenCryptoPayController(
       service: OpenCryptoPayService(client: client),
     ),
@@ -662,6 +680,221 @@ void main() {
         expect(setup.handler.isActivePaymentFor(_btcAddress), isFalse);
       },
     );
+
+    group("rejected coin", () {
+      const usdtAddress = "0xdac17f958d2ee523a2206206994597c13d831ec7";
+      final btcMain = (
+        walletId: "btc",
+        contractAddress: null,
+        walletName: "Bitcoin main",
+        currency: Bitcoin(CryptoCurrencyNetwork.main),
+        coin: cryptoCoinFor(Bitcoin(CryptoCurrencyNetwork.main)),
+      );
+      final usdtOnEth = (
+        walletId: "eth",
+        contractAddress: usdtAddress,
+        walletName: "Ethereum main",
+        currency: Ethereum(CryptoCurrencyNetwork.main),
+        coin: cryptoCoinFor(
+          Ethereum(CryptoCurrencyNetwork.main),
+          tokenSymbol: "USDT",
+        ),
+      );
+      final customUsdt = (
+        walletId: "eth2",
+        contractAddress: "0x1111111111111111111111111111111111111111",
+        walletName: "Ethereum custom",
+        currency: Ethereum(CryptoCurrencyNetwork.main),
+        coin: cryptoCoinFor(
+          Ethereum(CryptoCurrencyNetwork.main),
+          tokenSymbol: "USDT",
+        ),
+      );
+      final dogeMain = (
+        walletId: "doge",
+        contractAddress: null,
+        walletName: "Doge main",
+        currency: Dogecoin(CryptoCurrencyNetwork.main),
+        coin: cryptoCoinFor(Dogecoin(CryptoCurrencyNetwork.main)),
+      );
+      const pickerTitle = "Pay with another wallet";
+
+      _HandlerSetup scanFromMonero(
+        _Harness harness, {
+        required List<OpenCryptoPayCandidate> candidates,
+        required List<(OpenCryptoPayCandidate, OpenCryptoPaySuccess)> switches,
+      }) => _makeHandler(
+        harness: harness,
+        coin: Monero(CryptoCurrencyNetwork.main),
+        candidates: candidates,
+        switches: switches,
+        client: _mockOcpServer(
+          paymentInfo: _paymentInfoJson(quoteExpiration: _futureExpiration()),
+          txDetailsByAsset: {
+            "BTC": _btcDetailsJson(hint: _hexHint),
+            "USDT": _erc20DetailsJson(),
+          },
+        ),
+      );
+
+      testWidgets("offers the wallets and tokens the provider accepts", (
+        tester,
+      ) async {
+        final harness = await _pumpHarness(tester);
+        final switches = <(OpenCryptoPayCandidate, OpenCryptoPaySuccess)>[];
+        final setup = scanFromMonero(
+          harness,
+          candidates: [btcMain, usdtOnEth, customUsdt, dogeMain],
+          switches: switches,
+        );
+
+        final fut = setup.handler.handle(harness.context, _qrLink);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+
+        expect(find.text(pickerTitle), findsOneWidget);
+        expect(find.textContaining("does not accept XMR"), findsOneWidget);
+        expect(find.text("Bitcoin main"), findsOneWidget);
+        expect(find.text("BTC"), findsOneWidget);
+        expect(find.text("Ethereum main"), findsOneWidget);
+        expect(find.text("USDT"), findsNWidgets(2));
+        expect(find.text("Doge main"), findsNothing);
+        expect(find.text("Ethereum custom"), findsOneWidget);
+
+        await tester.tap(find.text("Ethereum main"));
+        await tester.pumpAndSettle();
+        await fut;
+
+        expect(switches.single.$1, usdtOnEth);
+        expect(switches.single.$2.address, _erc20Recipient);
+        expect(setup.sendTo.text, isEmpty);
+        expect(setup.handler.isActivePaymentFor(_btcAddress), isFalse);
+      });
+
+      testWidgets("resolves the payment for a picked coin before switching", (
+        tester,
+      ) async {
+        final harness = await _pumpHarness(tester);
+        final switches = <(OpenCryptoPayCandidate, OpenCryptoPaySuccess)>[];
+        final setup = scanFromMonero(
+          harness,
+          candidates: [btcMain],
+          switches: switches,
+        );
+
+        final fut = setup.handler.handle(harness.context, _qrLink);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        await tester.tap(find.text("Bitcoin main"));
+        await tester.pumpAndSettle();
+        await fut;
+
+        expect(switches.single.$1, btcMain);
+        expect(switches.single.$2.address, _btcAddress);
+        expect(setup.sendTo.text, isEmpty);
+      });
+
+      testWidgets("a picked token with another contract is refused", (
+        tester,
+      ) async {
+        final harness = await _pumpHarness(tester);
+        final switches = <(OpenCryptoPayCandidate, OpenCryptoPaySuccess)>[];
+        final setup = scanFromMonero(
+          harness,
+          candidates: [customUsdt],
+          switches: switches,
+        );
+
+        final fut = setup.handler.handle(harness.context, _qrLink);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        await tester.tap(find.text("Ethereum custom"));
+        await tester.pumpAndSettle();
+
+        expect(find.text("Different token"), findsOneWidget);
+        await _tapOk(tester);
+        await tester.pumpAndSettle();
+        await fut;
+
+        expect(switches, isEmpty);
+        expect(setup.sendTo.text, isEmpty);
+      });
+
+      testWidgets("cancelling the picker changes nothing", (tester) async {
+        final harness = await _pumpHarness(tester);
+        final switches = <(OpenCryptoPayCandidate, OpenCryptoPaySuccess)>[];
+        final setup = scanFromMonero(
+          harness,
+          candidates: [btcMain],
+          switches: switches,
+        );
+
+        final fut = setup.handler.handle(harness.context, _qrLink);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(find.text(pickerTitle), findsOneWidget);
+        await _tapButton(tester, "Cancel");
+        await tester.pumpAndSettle();
+        await fut;
+
+        expect(switches, isEmpty);
+        expect(
+          find.text(OpenCryptoPayStrings.unsupportedMethodTitle),
+          findsNothing,
+        );
+        expect(setup.sendTo.text, isEmpty);
+      });
+
+      testWidgets("shows the unsupported error when no wallet is accepted", (
+        tester,
+      ) async {
+        final harness = await _pumpHarness(tester);
+        final switches = <(OpenCryptoPayCandidate, OpenCryptoPaySuccess)>[];
+        final setup = scanFromMonero(
+          harness,
+          candidates: [dogeMain],
+          switches: switches,
+        );
+
+        final fut = setup.handler.handle(harness.context, _qrLink);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(find.text(pickerTitle), findsNothing);
+        expect(
+          find.text(OpenCryptoPayStrings.unsupportedMethodTitle),
+          findsOneWidget,
+        );
+        await _tapOk(tester);
+        await fut;
+
+        expect(switches, isEmpty);
+        expect(setup.sendTo.text, isEmpty);
+      });
+
+      testWidgets("an accepted coin prefills without the picker", (
+        tester,
+      ) async {
+        final harness = await _pumpHarness(tester);
+        final switches = <(OpenCryptoPayCandidate, OpenCryptoPaySuccess)>[];
+        final setup = _makeHandler(
+          harness: harness,
+          coin: Bitcoin(CryptoCurrencyNetwork.main),
+          candidates: [usdtOnEth],
+          switches: switches,
+          client: _mockOcpServer(
+            paymentInfo: _paymentInfoJson(quoteExpiration: _futureExpiration()),
+            txDetails: _btcDetailsJson(hint: _hashHint),
+          ),
+        );
+
+        await _handle(tester, harness, setup.handler);
+
+        expect(find.text(pickerTitle), findsNothing);
+        expect(switches, isEmpty);
+        expect(setup.sendTo.text, _btcAddress);
+        expect(setup.handler.isActivePaymentFor(_btcAddress), isTrue);
+      });
+    });
   });
 
   group("OpenCryptoPaySendHandler.confirmSend", () {

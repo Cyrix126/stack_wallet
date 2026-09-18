@@ -85,6 +85,7 @@ import '../../widgets/textfield_icon_button.dart';
 import '../address_book_views/address_book_view.dart';
 import '../coin_control/coin_control_view.dart';
 import '../open_crypto_pay/open_crypto_pay_send_handler.dart';
+import '../open_crypto_pay/open_crypto_pay_switch_wallet.dart';
 import 'confirm_transaction_view.dart';
 import 'sub_widgets/building_transaction_dialog.dart';
 import 'sub_widgets/dual_balance_selection_sheet.dart';
@@ -1369,6 +1370,16 @@ class _SendViewState extends ConsumerState<SendView> {
         ref.read(pSendAmount.notifier).state = parsed;
       },
       setValidAddress: _openCryptoPaySetValidAddress,
+      candidates: () => openCryptoPayCandidates(ref),
+      switchWallet: (context, candidate, payment) =>
+          openCryptoPaySwitchWallet(context, ref, candidate, payment),
+    );
+
+    takeOpenCryptoPayPayment(
+      ref,
+      this,
+      _openCryptoPay,
+      walletId: walletId,
     );
 
     if (_data != null) {

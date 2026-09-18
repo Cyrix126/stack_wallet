@@ -26,6 +26,7 @@ import '../../../../models/mwc_slatepack_models.dart';
 import '../../../../models/paynym/paynym_account_lite.dart';
 import '../../../../models/send_view_auto_fill_data.dart';
 import '../../../../pages/open_crypto_pay/open_crypto_pay_send_handler.dart';
+import '../../../../pages/open_crypto_pay/open_crypto_pay_switch_wallet.dart';
 import '../../../../pages/send_view/confirm_transaction_view.dart';
 import '../../../../pages/send_view/sub_widgets/building_transaction_dialog.dart';
 import '../../../../pages/send_view/sub_widgets/epic_slatepack_dialog.dart';
@@ -1322,6 +1323,16 @@ class _DesktopSendState extends ConsumerState<DesktopSend> {
         ref.read(pSendAmount.notifier).state = parsed;
       },
       setValidAddress: _openCryptoPaySetValidAddress,
+      candidates: () => openCryptoPayCandidates(ref),
+      switchWallet: (context, candidate, payment) =>
+          openCryptoPaySwitchWallet(context, ref, candidate, payment),
+    );
+
+    takeOpenCryptoPayPayment(
+      ref,
+      this,
+      _openCryptoPay,
+      walletId: widget.walletId,
     );
 
     if (_data != null) {

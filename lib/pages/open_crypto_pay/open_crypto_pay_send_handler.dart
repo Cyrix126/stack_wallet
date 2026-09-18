@@ -8,6 +8,8 @@
  *
  */
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:opencryptopay/opencryptopay.dart';
 
@@ -26,6 +28,8 @@ import '../../widgets/dialogs/basic_dialog.dart';
 import '../../widgets/eth_fee_form.dart';
 import '../../widgets/stack_dialog.dart';
 import 'open_crypto_pay_send_fee.dart';
+import 'open_crypto_pay_switch_wallet.dart';
+import 'open_crypto_pay_switch_wallet_dialog.dart';
 
 ({String title, String message}) _quoteMismatchText({
   required bool sameRecipient,
@@ -55,7 +59,17 @@ CryptoCoin cryptoCoinFor(CryptoCurrency currency, {String? tokenSymbol}) =>
 
 typedef BusinessDetail = ({String label, String value, Uri? uri});
 
+/// Opens the send view of [candidate] with [payment] prefilled.
+typedef OpenCryptoPaySwitchWallet = Future<void> Function(
+  BuildContext context,
+  OpenCryptoPayCandidate candidate,
+  OpenCryptoPaySuccess payment,
+);
+
 const _tokenMismatchTitle = "Different token";
+const _pickedTokenMismatchMessage =
+    "The payment request is for a token with a different contract address "
+    "than the chosen token.";
 const _tokenMismatchMessage =
     "The payment request is for a token with a different contract address "
     "than this wallet's token. Scan the code from the wallet holding that "
@@ -70,6 +84,8 @@ class OpenCryptoPaySendHandler {
     this.tokenSymbol,
     this.tokenDecimals,
     this.tokenContractAddress,
+    this.candidates,
+    this.switchWallet,
     @visibleForTesting OpenCryptoPayController? controller,
   }) : _controller =
            controller ??
@@ -90,6 +106,11 @@ class OpenCryptoPaySendHandler {
 
   /// Set for token wallets; a request for another contract is refused.
   final String? tokenContractAddress;
+
+  /// The wallets and tokens offered when the provider rejects [coin]; read
+  /// at that moment only.
+  final List<OpenCryptoPayCandidate> Function()? candidates;
+  final OpenCryptoPaySwitchWallet? switchWallet;
 
   int get _fractionDigits => tokenDecimals ?? coin.fractionDigits;
 
@@ -253,23 +274,55 @@ class OpenCryptoPaySendHandler {
   }
 
   Future<void> handle(BuildContext context, String qrData) async {
-    final result = await showLoading<OpenCryptoPayResult>(
-      whileFuture: _controller.run(
-        qrData: qrData,
-        coin: cryptoCoinFor(coin, tokenSymbol: tokenSymbol),
-        onError: (e, s) => Logging.instance.w(
-          "OpenCryptoPay flow failed",
-          error: e,
-          stackTrace: s,
-        ),
-      ),
-      context: context,
-      rootNavigator: Util.isDesktop,
-      message: OpenCryptoPayStrings.loading,
-    );
+    // The library iterates ownedCoins only when it rejects the coin.
+    List<OpenCryptoPayCandidate>? candidates;
+    Iterable<CryptoCoin> ownedCoins() sync* {
+      candidates ??= this.candidates?.call() ?? const [];
+      yield* candidates!.map((c) => c.coin);
+    }
 
+    final result = await _resolve(
+      context,
+      qrData,
+      cryptoCoinFor(coin, tokenSymbol: tokenSymbol),
+      ownedCoins: ownedCoins(),
+    );
     if (!context.mounted) return;
 
+    if (result case OpenCryptoPayUnsupported(:final alternatives?)
+        when alternatives.isNotEmpty) {
+      return _offerSwitch(context, qrData, _payable(candidates!, alternatives));
+    }
+    return handleResult(context, result);
+  }
+
+  /// Runs the payment flow for [coin] under a loading dialog.
+  Future<OpenCryptoPayResult?> _resolve(
+    BuildContext context,
+    String qrData,
+    CryptoCoin coin, {
+    Iterable<CryptoCoin>? ownedCoins,
+  }) => showLoading<OpenCryptoPayResult>(
+    whileFuture: _controller.run(
+      qrData: qrData,
+      coin: coin,
+      ownedCoins: ownedCoins,
+      onError: (e, s) => Logging.instance.w(
+        "OpenCryptoPay flow failed",
+        error: e,
+        stackTrace: s,
+      ),
+    ),
+    context: context,
+    rootNavigator: Util.isDesktop,
+    message: OpenCryptoPayStrings.loading,
+  );
+
+  /// Prefills the form from [result], or shows its error.
+  Future<void> handleResult(
+    BuildContext context,
+    OpenCryptoPayResult? result,
+  ) async {
     switch (result) {
       case null:
         await _showError(
@@ -297,9 +350,64 @@ class OpenCryptoPaySendHandler {
     }
   }
 
-  bool _isOtherToken(OpenCryptoPaySuccess result) {
+  /// Candidates the provider accepts for this payment.
+  static List<OpenCryptoPayCandidate> _payable(
+    List<OpenCryptoPayCandidate> candidates,
+    List<CryptoCoin> alternatives,
+  ) => candidates
+      .where(
+        (c) => alternatives.any(
+          (a) => a.prettyName == c.coin.prettyName && a.ticker == c.coin.ticker,
+        ),
+      )
+      .toList();
+
+  /// Lets the user pick one of [payable] to pay with, resolves the payment
+  /// for it and hands both to [switchWallet].
+  Future<void> _offerSwitch(
+    BuildContext context,
+    String qrData,
+    List<OpenCryptoPayCandidate> payable,
+  ) async {
+    final switchWallet = this.switchWallet;
+    if (payable.isEmpty || switchWallet == null) {
+      final text = OpenCryptoPayStrings.failure(
+        const OpenCryptoPayUnsupported(),
+      );
+      return _showError(
+        context: context,
+        title: text.title,
+        message: text.message,
+      );
+    }
+    final chosen = await showDialog<OpenCryptoPayCandidate>(
+      context: context,
+      builder: (_) => OpenCryptoPaySwitchWalletDialog(
+        ticker: tokenSymbol ?? coin.ticker,
+        candidates: payable,
+      ),
+    );
+    if (chosen == null || !context.mounted) return;
+    final payment = await _resolve(context, qrData, chosen.coin);
+    if (!context.mounted) return;
+    if (payment is! OpenCryptoPaySuccess) return handleResult(context, payment);
+    if (payment.session.isQuoteExpired) return showQuoteExpiredError(context);
+    if (_otherContract(payment, chosen.contractAddress)) {
+      return _showError(
+        context: context,
+        title: _tokenMismatchTitle,
+        message: _pickedTokenMismatchMessage,
+      );
+    }
+    await switchWallet(context, chosen, payment);
+  }
+
+  bool _isOtherToken(OpenCryptoPaySuccess result) =>
+      _otherContract(result, tokenContractAddress);
+
+  /// Whether [result] names a token contract other than [held].
+  static bool _otherContract(OpenCryptoPaySuccess result, String? held) {
     final requested = result.tokenContractAddress;
-    final held = tokenContractAddress;
     return requested != null &&
         held != null &&
         requested.toLowerCase() != held.toLowerCase();

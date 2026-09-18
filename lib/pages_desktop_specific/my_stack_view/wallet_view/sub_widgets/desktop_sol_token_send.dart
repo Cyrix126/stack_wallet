@@ -21,6 +21,7 @@ import '../../../../models/isar/models/solana/sol_contract.dart';
 import '../../../../models/paynym/paynym_account_lite.dart';
 import '../../../../models/send_view_auto_fill_data.dart';
 import '../../../../pages/open_crypto_pay/open_crypto_pay_send_handler.dart';
+import '../../../../pages/open_crypto_pay/open_crypto_pay_switch_wallet.dart';
 import '../../../../pages/send_view/confirm_transaction_view.dart';
 import '../../../../pages/send_view/sub_widgets/building_transaction_dialog.dart';
 import '../../../../providers/providers.dart';
@@ -708,8 +709,19 @@ class _DesktopSolTokenSendState extends ConsumerState<DesktopSolTokenSend> {
         _updatePreviewButtonState(_address, parsed);
       },
       setValidAddress: _openCryptoPaySetValidAddress,
+      candidates: () => openCryptoPayCandidates(ref),
+      switchWallet: (context, candidate, payment) =>
+          openCryptoPaySwitchWallet(context, ref, candidate, payment),
       tokenSymbol: tokenWallet?.tokenSymbol,
       tokenDecimals: tokenWallet?.tokenDecimals,
+    );
+
+    takeOpenCryptoPayPayment(
+      ref,
+      this,
+      _openCryptoPay,
+      walletId: widget.walletId,
+      contractAddress: tokenWallet?.tokenMint,
     );
 
     super.initState();

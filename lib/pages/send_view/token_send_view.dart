@@ -59,6 +59,7 @@ import '../../widgets/stack_text_field.dart';
 import '../../widgets/textfield_icon_button.dart';
 import '../address_book_views/address_book_view.dart';
 import '../open_crypto_pay/open_crypto_pay_send_handler.dart';
+import '../open_crypto_pay/open_crypto_pay_switch_wallet.dart';
 import '../token_view/token_view.dart';
 import 'confirm_transaction_view.dart';
 import 'sub_widgets/building_transaction_dialog.dart';
@@ -674,9 +675,20 @@ class _TokenSendViewState extends ConsumerState<TokenSendView> {
         _updatePreviewButtonState(_address, parsed);
       },
       setValidAddress: _openCryptoPaySetValidAddress,
+      candidates: () => openCryptoPayCandidates(ref),
+      switchWallet: (context, candidate, payment) =>
+          openCryptoPaySwitchWallet(context, ref, candidate, payment),
       tokenSymbol: tokenContract.symbol,
       tokenDecimals: tokenContract.decimals,
       tokenContractAddress: tokenContract.address,
+    );
+
+    takeOpenCryptoPayPayment(
+      ref,
+      this,
+      _openCryptoPay,
+      walletId: walletId,
+      contractAddress: tokenContract.address,
     );
 
     super.initState();
