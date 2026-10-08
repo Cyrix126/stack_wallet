@@ -340,9 +340,8 @@ class _DesktopFeeItemState extends ConsumerState<DesktopFeeItem> {
         onPressed: () {
           ref.read(feeRateTypeDesktopStateProvider.state).state =
               widget.feeRateType;
-          Navigator.of(
-            context,
-          ).pop((widget.feeRateType, feeString, timeString));
+          Navigator.of(context)
+              .pop((widget.feeRateType, feeString, timeString));
         },
         child: child,
       ),
@@ -356,9 +355,9 @@ class _DesktopFeeItemState extends ConsumerState<DesktopFeeItem> {
                   widget.feeRateType.prettyName,
                   style: STextStyles.desktopTextExtraExtraSmall(context)
                       .copyWith(
-                        color: Theme.of(
-                          context,
-                        ).extension<StackColors>()!.textFieldActiveText,
+                        color: Theme.of(context)
+                            .extension<StackColors>()!
+                            .textFieldActiveText,
                       ),
                   textAlign: TextAlign.left,
                 ),
@@ -374,9 +373,9 @@ class _DesktopFeeItemState extends ConsumerState<DesktopFeeItem> {
             return AnimatedText(
               stringsToLoopThrough: stringsToLoopThrough,
               style: STextStyles.desktopTextExtraExtraSmall(context).copyWith(
-                color: Theme.of(
-                  context,
-                ).extension<StackColors>()!.textFieldActiveText,
+                color: Theme.of(context)
+                    .extension<StackColors>()!
+                    .textFieldActiveText,
               ),
             );
           } else {
@@ -416,9 +415,9 @@ class _DesktopFeeItemState extends ConsumerState<DesktopFeeItem> {
                         feeString!,
                         style: STextStyles.desktopTextExtraExtraSmall(context)
                             .copyWith(
-                              color: Theme.of(
-                                context,
-                              ).extension<StackColors>()!.textFieldActiveText,
+                              color: Theme.of(context)
+                                  .extension<StackColors>()!
+                                  .textFieldActiveText,
                             ),
                         textAlign: TextAlign.left,
                       ),
@@ -439,9 +438,9 @@ class _DesktopFeeItemState extends ConsumerState<DesktopFeeItem> {
                     stringsToLoopThrough: stringsToLoopThrough,
                     style: STextStyles.desktopTextExtraExtraSmall(context)
                         .copyWith(
-                          color: Theme.of(
-                            context,
-                          ).extension<StackColors>()!.textFieldActiveText,
+                          color: Theme.of(context)
+                              .extension<StackColors>()!
+                              .textFieldActiveText,
                         ),
                   );
                 }
