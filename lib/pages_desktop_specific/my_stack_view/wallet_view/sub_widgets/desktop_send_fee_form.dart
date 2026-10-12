@@ -75,7 +75,8 @@ class _DesktopSendFeeFormState extends ConsumerState<DesktopSendFeeForm> {
   Widget build(BuildContext context) {
     // Keep the send amount alive for the fee estimates.
     ref.listen(sendAmountProvider, (_, __) {});
-    final isCustomFee = ref.watch(feeRateTypeDesktopStateProvider).isCustom;
+    final selectedFeeRateType = ref.watch(feeRateTypeDesktopStateProvider);
+    final isCustomFee = selectedFeeRateType.isCustom;
     final locale = ref.watch(
       localeServiceChangeNotifierProvider.select((value) => value.locale),
     );
@@ -156,7 +157,7 @@ class _DesktopSendFeeFormState extends ConsumerState<DesktopSendFeeForm> {
                           snapshot.hasData) {
                         return DesktopFeeItem(
                           feeObject: snapshot.data,
-                          feeRateType: FeeRateType.average,
+                          feeRateType: selectedFeeRateType,
                           walletId: widget.walletId,
                           isButton: false,
                           isToken: widget.isToken,
