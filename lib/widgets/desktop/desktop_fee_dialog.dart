@@ -118,9 +118,6 @@ class DesktopFeeItem extends ConsumerStatefulWidget {
 }
 
 class _DesktopFeeItemState extends ConsumerState<DesktopFeeItem> {
-  String? feeString;
-  String? timeString;
-
   static const stringsToLoopThrough = [
     "Calculating",
     "Calculating.",
@@ -273,8 +270,7 @@ class _DesktopFeeItemState extends ConsumerState<DesktopFeeItem> {
         onPressed: () {
           ref.read(feeRateTypeDesktopStateProvider.state).state =
               widget.feeRateType;
-          Navigator.of(context)
-              .pop((widget.feeRateType, feeString, timeString));
+          Navigator.of(context).pop();
         },
         child: child,
       ),
@@ -326,11 +322,11 @@ class _DesktopFeeItemState extends ConsumerState<DesktopFeeItem> {
               builder: (_, AsyncSnapshot<Amount> snapshot) {
                 if (snapshot.connectionState == ConnectionState.done &&
                     snapshot.hasData) {
-                  feeString =
+                  final feeString =
                       "${widget.feeRateType.prettyName} "
                       "(~${ref.watch(pAmountFormatter(wallet.info.coin)).format(snapshot.data!, indicatePrecisionLoss: false)})";
 
-                  timeString = wallet.info.coin is Ethereum
+                  final timeString = wallet.info.coin is Ethereum
                       ? ""
                       : estimatedTimeToBeIncludedInNextBlock(
                           wallet.info.coin.targetBlockTimeSeconds,
@@ -345,7 +341,7 @@ class _DesktopFeeItemState extends ConsumerState<DesktopFeeItem> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text(
-                        feeString!,
+                        feeString,
                         style: STextStyles.desktopTextExtraExtraSmall(context)
                             .copyWith(
                               color: Theme.of(context)
@@ -356,7 +352,7 @@ class _DesktopFeeItemState extends ConsumerState<DesktopFeeItem> {
                       ),
                       if (widget.feeObject != null)
                         Text(
-                          timeString!,
+                          timeString,
                           style: STextStyles.desktopTextExtraExtraSmall(context)
                               .copyWith(
                                 color: Theme.of(context)

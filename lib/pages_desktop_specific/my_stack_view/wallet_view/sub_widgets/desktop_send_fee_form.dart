@@ -53,8 +53,6 @@ class _DesktopSendFeeFormState extends ConsumerState<DesktopSendFeeForm> {
 
   bool get isEth => cryptoCurrency is Ethereum;
 
-  (FeeRateType, String?, String?)? feeSelectionResult;
-
   @override
   void initState() {
     super.initState();
@@ -101,20 +99,20 @@ class _DesktopSendFeeFormState extends ConsumerState<DesktopSendFeeForm> {
                 text: "Edit",
                 onTap: () async {
                   final wasCustomFee = isCustomFee;
-                  feeSelectionResult =
-                      await showDialog<(FeeRateType, String?, String?)?>(
-                        context: context,
-                        builder: (_) => DesktopFeeDialog(
-                          walletId: widget.walletId,
-                          isToken: widget.isToken,
-                        ),
-                      );
+                  await showDialog<void>(
+                    context: context,
+                    builder: (_) => DesktopFeeDialog(
+                      walletId: widget.walletId,
+                      isToken: widget.isToken,
+                    ),
+                  );
+                  if (!mounted) return;
 
-                  if (feeSelectionResult != null) {
-                    final selectedIsCustomFee = feeSelectionResult!.$1.isCustom;
-                    if (wasCustomFee != selectedIsCustomFee) {
-                      widget.onCustomFeeOptionChanged.call();
-                    }
+                  final selectedIsCustomFee = ref
+                      .read(feeRateTypeDesktopStateProvider)
+                      .isCustom;
+                  if (wasCustomFee != selectedIsCustomFee) {
+                    widget.onCustomFeeOptionChanged.call();
                   }
 
                   setState(() {});
@@ -134,15 +132,10 @@ class _DesktopSendFeeFormState extends ConsumerState<DesktopSendFeeForm> {
           ),
         ),
         const SizedBox(height: 10),
-        if (cryptoCurrency is Xelis)
-          const Padding(
-            padding: EdgeInsets.all(10),
-            child: Text('Calculated when reviewing'),
-          )
-        else if (!isCustomFee)
+        if (!isCustomFee)
           Padding(
             padding: const EdgeInsets.all(10),
-            child: (feeSelectionResult?.$2 == null)
+            child: cryptoCurrency is! Xelis
                 ? FutureBuilder(
                     future: _fees ??= ref
                         .read(pWallets)
@@ -182,30 +175,7 @@ class _DesktopSendFeeFormState extends ConsumerState<DesktopSendFeeForm> {
                       }
                     },
                   )
-                : Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        feeSelectionResult?.$2 ?? "",
-                        style: STextStyles.desktopTextExtraExtraSmall(context)
-                            .copyWith(
-                              color: Theme.of(context)
-                                  .extension<StackColors>()!
-                                  .textFieldActiveText,
-                            ),
-                        textAlign: TextAlign.left,
-                      ),
-                      Text(
-                        feeSelectionResult?.$3 ?? "",
-                        style: STextStyles.desktopTextExtraExtraSmall(context)
-                            .copyWith(
-                              color: Theme.of(context)
-                                  .extension<StackColors>()!
-                                  .textFieldActiveSearchIconRight,
-                            ),
-                      ),
-                    ],
-                  ),
+                : const Text('Calculated when reviewing'),
           ),
         if (isCustomFee && isEth)
           EthFeeForm(
