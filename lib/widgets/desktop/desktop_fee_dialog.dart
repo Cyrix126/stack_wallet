@@ -5,9 +5,11 @@ import '../../models/models.dart';
 import '../../pages/send_view/sub_widgets/transaction_fee_selection_sheet.dart';
 import '../../providers/global/wallets_provider.dart';
 import '../../providers/ui/fee_rate_type_state_provider.dart';
+import '../../providers/ui/preview_tx_button_state_provider.dart';
 import '../../providers/wallet/desktop_fee_providers.dart';
 import '../../providers/wallet/public_private_balance_state_provider.dart';
 import '../../themes/stack_colors.dart';
+import '../../utilities/address_utils.dart';
 import '../../utilities/amount/amount.dart';
 import '../../utilities/amount/amount_formatter.dart';
 import '../../utilities/enums/fee_rate_type_enum.dart';
@@ -36,177 +38,7 @@ class DesktopFeeDialog extends ConsumerStatefulWidget {
 }
 
 class _DesktopFeeDialogState extends ConsumerState<DesktopFeeDialog> {
-  late final String walletId;
-
   FeeObject? feeObject;
-  FeeRateType feeRateType = FeeRateType.average;
-
-  Future<Amount> feeFor({
-    required Amount amount,
-    required FeeRateType feeRateType,
-    required BigInt feeRate,
-    required CryptoCurrency coin,
-  }) async {
-    switch (feeRateType) {
-      case FeeRateType.fast:
-        if (ref
-                .read(
-                  widget.isToken
-                      ? tokenFeeSessionCacheProvider
-                      : feeSheetSessionCacheProvider,
-                )
-                .fast[amount] ==
-            null) {
-          if (widget.isToken == false) {
-            final wallet = ref.read(pWallets).getWallet(walletId);
-
-            if (wallet is CryptonoteWallet) {
-              final fee = await wallet.estimateFeeFor(
-                amount,
-                BigInt.from(wallet.getTxPriorityHigh()),
-              );
-              ref.read(feeSheetSessionCacheProvider).fast[amount] = fee;
-            } else if (coin is Firo) {
-              final Amount fee;
-              switch (ref.read(publicPrivateBalanceStateProvider.state).state) {
-                case BalanceType.private:
-                  fee = await (wallet as FiroWallet).estimateFeeForSpark(
-                    amount,
-                  );
-                case BalanceType.public:
-                  fee = await (wallet as FiroWallet).estimateFeeFor(
-                    amount,
-                    feeRate,
-                  );
-              }
-              ref.read(feeSheetSessionCacheProvider).fast[amount] = fee;
-            } else {
-              ref.read(feeSheetSessionCacheProvider).fast[amount] = await wallet
-                  .estimateFeeFor(amount, feeRate);
-            }
-          } else {
-            final tokenWallet = ref.read(pCurrentTokenWallet)!;
-            final fee = await tokenWallet.estimateFeeFor(amount, feeRate);
-            ref.read(tokenFeeSessionCacheProvider).fast[amount] = fee;
-          }
-        }
-        return ref
-            .read(
-              widget.isToken
-                  ? tokenFeeSessionCacheProvider
-                  : feeSheetSessionCacheProvider,
-            )
-            .fast[amount]!;
-
-      case FeeRateType.average:
-        if (ref
-                .read(
-                  widget.isToken
-                      ? tokenFeeSessionCacheProvider
-                      : feeSheetSessionCacheProvider,
-                )
-                .average[amount] ==
-            null) {
-          if (widget.isToken == false) {
-            final wallet = ref.read(pWallets).getWallet(walletId);
-
-            if (wallet is CryptonoteWallet) {
-              final fee = await wallet.estimateFeeFor(
-                amount,
-                BigInt.from(wallet.getTxPriorityMedium()),
-              );
-              ref.read(feeSheetSessionCacheProvider).average[amount] = fee;
-            } else if (coin is Firo) {
-              final Amount fee;
-              switch (ref.read(publicPrivateBalanceStateProvider.state).state) {
-                case BalanceType.private:
-                  fee = await (wallet as FiroWallet).estimateFeeForSpark(
-                    amount,
-                  );
-                case BalanceType.public:
-                  fee = await (wallet as FiroWallet).estimateFeeFor(
-                    amount,
-                    feeRate,
-                  );
-              }
-              ref.read(feeSheetSessionCacheProvider).average[amount] = fee;
-            } else {
-              ref.read(feeSheetSessionCacheProvider).average[amount] =
-                  await wallet.estimateFeeFor(amount, feeRate);
-            }
-          } else {
-            final tokenWallet = ref.read(pCurrentTokenWallet)!;
-            final fee = await tokenWallet.estimateFeeFor(amount, feeRate);
-            ref.read(tokenFeeSessionCacheProvider).average[amount] = fee;
-          }
-        }
-        return ref
-            .read(
-              widget.isToken
-                  ? tokenFeeSessionCacheProvider
-                  : feeSheetSessionCacheProvider,
-            )
-            .average[amount]!;
-
-      case FeeRateType.slow:
-        if (ref
-                .read(
-                  widget.isToken
-                      ? tokenFeeSessionCacheProvider
-                      : feeSheetSessionCacheProvider,
-                )
-                .slow[amount] ==
-            null) {
-          if (widget.isToken == false) {
-            final wallet = ref.read(pWallets).getWallet(walletId);
-
-            if (wallet is CryptonoteWallet) {
-              final fee = await wallet.estimateFeeFor(
-                amount,
-                BigInt.from(wallet.getTxPriorityNormal()),
-              );
-              ref.read(feeSheetSessionCacheProvider).slow[amount] = fee;
-            } else if (coin is Firo) {
-              final Amount fee;
-              switch (ref.read(publicPrivateBalanceStateProvider.state).state) {
-                case BalanceType.private:
-                  fee = await (wallet as FiroWallet).estimateFeeForSpark(
-                    amount,
-                  );
-                case BalanceType.public:
-                  fee = await (wallet as FiroWallet).estimateFeeFor(
-                    amount,
-                    feeRate,
-                  );
-              }
-              ref.read(feeSheetSessionCacheProvider).slow[amount] = fee;
-            } else {
-              ref.read(feeSheetSessionCacheProvider).slow[amount] = await wallet
-                  .estimateFeeFor(amount, feeRate);
-            }
-          } else {
-            final tokenWallet = ref.read(pCurrentTokenWallet)!;
-            final fee = await tokenWallet.estimateFeeFor(amount, feeRate);
-            ref.read(tokenFeeSessionCacheProvider).slow[amount] = fee;
-          }
-        }
-        return ref
-            .read(
-              widget.isToken
-                  ? tokenFeeSessionCacheProvider
-                  : feeSheetSessionCacheProvider,
-            )
-            .slow[amount]!;
-      default:
-        return Amount.zero;
-    }
-  }
-
-  @override
-  void initState() {
-    walletId = widget.walletId;
-    super.initState();
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -215,7 +47,7 @@ class _DesktopFeeDialogState extends ConsumerState<DesktopFeeDialog> {
       maxHeight: double.infinity,
       child: FutureBuilder(
         future: ref.watch(
-          pWallets.select((value) => value.getWallet(walletId).fees),
+          pWallets.select((value) => value.getWallet(widget.walletId).fees),
         ),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.done &&
@@ -248,8 +80,8 @@ class _DesktopFeeDialogState extends ConsumerState<DesktopFeeDialog> {
                   child: DesktopFeeItem(
                     feeObject: feeObject,
                     feeRateType: e,
-                    walletId: walletId,
-                    feeFor: feeFor,
+                    walletId: widget.walletId,
+                    isToken: widget.isToken,
                     isSelected: false,
                   ),
                 ),
@@ -269,7 +101,7 @@ class DesktopFeeItem extends ConsumerStatefulWidget {
     required this.feeObject,
     required this.feeRateType,
     required this.walletId,
-    required this.feeFor,
+    required this.isToken,
     required this.isSelected,
     this.isButton = true,
   });
@@ -277,13 +109,7 @@ class DesktopFeeItem extends ConsumerStatefulWidget {
   final FeeObject? feeObject;
   final FeeRateType feeRateType;
   final String walletId;
-  final Future<Amount> Function({
-    required Amount amount,
-    required FeeRateType feeRateType,
-    required BigInt feeRate,
-    required CryptoCurrency coin,
-  })
-  feeFor;
+  final bool isToken;
   final bool isSelected;
   final bool isButton;
 
@@ -301,6 +127,113 @@ class _DesktopFeeItemState extends ConsumerState<DesktopFeeItem> {
     "Calculating..",
     "Calculating...",
   ];
+
+  Amount _addFiroOpReturnFee({
+    required Amount fee,
+    required BigInt feeRate,
+    required FiroWallet wallet,
+    required CryptoCurrency coin,
+  }) {
+    final opReturnData = ref.read(pOpReturnData);
+    if (opReturnData == null ||
+        opReturnData.isEmpty ||
+        ref.read(publicPrivateBalanceStateProvider) != BalanceType.public) {
+      return fee;
+    }
+
+    final extraOutputVSize = AddressUtils.opReturnOutputVSizeFromHex(
+      opReturnData,
+    );
+    final extraFee = wallet.estimateTxFee(
+      vSize: extraOutputVSize,
+      feeRatePerKB: feeRate,
+    );
+
+    return fee +
+        Amount(
+          rawValue: BigInt.from(extraFee),
+          fractionDigits: coin.fractionDigits,
+        );
+  }
+
+  Future<Amount> feeFor({
+    required Amount amount,
+    required FeeRateType feeRateType,
+    required BigInt feeRate,
+    required CryptoCurrency coin,
+  }) async {
+    if (!widget.isToken &&
+        coin is Firo &&
+        ref.read(publicPrivateBalanceStateProvider) == BalanceType.public &&
+        (ref.read(pOpReturnData)?.isNotEmpty ?? false)) {
+      final wallet =
+          ref.read(pWallets).getWallet(widget.walletId) as FiroWallet;
+      final fee = await wallet.estimateFeeFor(amount, feeRate);
+      return _addFiroOpReturnFee(
+        fee: fee,
+        feeRate: feeRate,
+        wallet: wallet,
+        coin: coin,
+      );
+    }
+
+    final cache = ref.read(
+      widget.isToken
+          ? tokenFeeSessionCacheProvider
+          : feeSheetSessionCacheProvider,
+    );
+    final Map<Amount, Amount> fees;
+    switch (feeRateType) {
+      case FeeRateType.fast:
+        fees = cache.fast;
+      case FeeRateType.average:
+        fees = cache.average;
+      case FeeRateType.slow:
+        fees = cache.slow;
+      case FeeRateType.custom:
+        return Amount.zero;
+    }
+
+    if (fees[amount] == null) {
+      if (widget.isToken) {
+        try {
+          final tokenWallet = ref.read(pCurrentTokenWallet)!;
+          fees[amount] = await tokenWallet.estimateFeeFor(amount, feeRate);
+        } catch (_) {
+          debugPrint("Token fee estimation not available");
+        }
+      } else {
+        final wallet = ref.read(pWallets).getWallet(widget.walletId);
+
+        if (wallet is CryptonoteWallet) {
+          final priority = switch (feeRateType) {
+            FeeRateType.fast => wallet.getTxPriorityHigh(),
+            FeeRateType.slow => wallet.getTxPriorityNormal(),
+            _ => wallet.getTxPriorityMedium(),
+          };
+          fees[amount] = await wallet.estimateFeeFor(
+            amount,
+            BigInt.from(priority),
+          );
+        } else if (coin is Firo) {
+          switch (ref.read(publicPrivateBalanceStateProvider.state).state) {
+            case BalanceType.private:
+              fees[amount] = await (wallet as FiroWallet).estimateFeeForSpark(
+                amount,
+              );
+            case BalanceType.public:
+              fees[amount] = await (wallet as FiroWallet).estimateFeeFor(
+                amount,
+                feeRate,
+              );
+          }
+        } else {
+          fees[amount] = await wallet.estimateFeeFor(amount, feeRate);
+        }
+      }
+    }
+    return fees[amount]!;
+  }
 
   String estimatedTimeToBeIncludedInNextBlock(
     int targetBlockTime,
@@ -380,7 +313,7 @@ class _DesktopFeeItemState extends ConsumerState<DesktopFeeItem> {
             );
           } else {
             return FutureBuilder(
-              future: widget.feeFor(
+              future: feeFor(
                 coin: wallet.info.coin,
                 feeRateType: widget.feeRateType,
                 feeRate: widget.feeRateType == FeeRateType.fast
