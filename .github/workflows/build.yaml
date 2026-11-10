@@ -65,10 +65,9 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
 
-      - name: Decode secrets
-        env:
-          CHANGE_NOW: ${{ secrets.CHANGE_NOW }}
-        run: echo "$CHANGE_NOW" | base64 --decode > lib/external_api_keys.dart
+      - name: Create empty API keys
+        run: bash prebuild.sh
+        working-directory: scripts
 
       - name: Build
         env:
@@ -133,10 +132,9 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
 
-      - name: Decode secrets
-        env:
-          CHANGE_NOW: ${{ secrets.CHANGE_NOW }}
-        run: echo "$CHANGE_NOW" | base64 --decode > lib/external_api_keys.dart
+      - name: Create empty API keys
+        run: bash prebuild.sh
+        working-directory: scripts
 
       - name: Set up Android local.properties
         run: |
@@ -264,10 +262,9 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
 
-      - name: Decode secrets
-        env:
-          CHANGE_NOW: ${{ secrets.CHANGE_NOW }}
-        run: echo "$CHANGE_NOW" | base64 --decode > lib/external_api_keys.dart
+      - name: Create empty API keys
+        run: bash prebuild.sh
+        working-directory: scripts
 
       - name: Build secp256k1.dll for Windows
         run: dart run coinlib:build_windows
@@ -332,10 +329,9 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
 
-      - name: Decode secrets
-        env:
-          CHANGE_NOW: ${{ secrets.CHANGE_NOW }}
-        run: echo "$CHANGE_NOW" | base64 --decode > lib/external_api_keys.dart
+      - name: Create empty API keys
+        run: bash prebuild.sh
+        working-directory: scripts
 
       - name: Build
         run: flutter build macos --release
@@ -402,10 +398,9 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
 
-      - name: Decode secrets
-        env:
-          CHANGE_NOW: ${{ secrets.CHANGE_NOW }}
-        run: echo "$CHANGE_NOW" | base64 --decode > lib/external_api_keys.dart
+      - name: Create empty API keys
+        run: bash prebuild.sh
+        working-directory: scripts
 
       - name: Build
         run: flutter build ios --release --no-codesign
