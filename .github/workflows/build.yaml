@@ -16,6 +16,8 @@ on:
         required: true
         default: '301'
 
+# Configure app uses -d to select pinned Epic/MWC prebuilts when included.
+# Other native-assets packages, including frostdart, still build from source.
 jobs:
 
   build-linux:
@@ -63,19 +65,6 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
 
-      - name: Create git_versions.dart stubs
-        run: |
-          mkdir -p crypto_plugins/flutter_libepiccash/lib
-          mkdir -p crypto_plugins/flutter_libmwc/lib
-
-          EPIC_TAG=$(git -C crypto_plugins/flutter_libepiccash describe --tags --exact-match HEAD 2>/dev/null || echo "dev")
-          MWC_TAG=$(git -C crypto_plugins/flutter_libmwc describe --tags --exact-match HEAD 2>/dev/null || echo "dev")
-
-          printf 'String getPluginVersion() => "%s";\n' "$EPIC_TAG" \
-            > crypto_plugins/flutter_libepiccash/lib/git_versions.dart
-          printf 'String getPluginVersion() => "%s";\n' "$MWC_TAG" \
-            > crypto_plugins/flutter_libmwc/lib/git_versions.dart
-
       - name: Decode secrets
         env:
           CHANGE_NOW: ${{ secrets.CHANGE_NOW }}
@@ -86,14 +75,17 @@ jobs:
           USE_SYSTEM_SECURE_STORAGE_DEPS: "1"
         run: flutter build linux --release --verbose
 
+      - name: Prepare Linux release bundle
+        run: python3 scripts/linux/prepare_release_bundle.py build/linux/x64/release/bundle
+
       - name: Package
         run: |
           tar -czf "stack_wallet-linux-x86_64-${{ steps.ver.outputs.version }}.tar.gz" \
             -C build/linux/x64/release bundle
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
-          name: stack_wallet-linux-x86_64-${{ steps.ver.outputs.version }}
+          name: stack_wallet-linux-x86_64-${{ steps.ver.outputs.version }}.tar.gz
           path: stack_wallet-linux-x86_64-${{ steps.ver.outputs.version }}.tar.gz
 
   build-android:
@@ -102,7 +94,7 @@ jobs:
       contents: read
       packages: read
     container:
-      image: ghcr.io/cypherstack/stackwallet-ci:latest
+      image: ghcr.io/cypherstack/stackwallet-ci:android
       credentials:
         username: ${{ github.actor }}
         password: ${{ github.token }}
@@ -140,19 +132,6 @@ jobs:
 
       - name: Get dependencies
         run: flutter pub get
-
-      - name: Create git_versions.dart stubs
-        run: |
-          mkdir -p crypto_plugins/flutter_libepiccash/lib
-          mkdir -p crypto_plugins/flutter_libmwc/lib
-
-          EPIC_TAG=$(git -C crypto_plugins/flutter_libepiccash describe --tags --exact-match HEAD 2>/dev/null || echo "dev")
-          MWC_TAG=$(git -C crypto_plugins/flutter_libmwc describe --tags --exact-match HEAD 2>/dev/null || echo "dev")
-
-          printf 'String getPluginVersion() => "%s";\n' "$EPIC_TAG" \
-            > crypto_plugins/flutter_libepiccash/lib/git_versions.dart
-          printf 'String getPluginVersion() => "%s";\n' "$MWC_TAG" \
-            > crypto_plugins/flutter_libmwc/lib/git_versions.dart
 
       - name: Decode secrets
         env:
@@ -204,8 +183,10 @@ jobs:
              android-artifacts/stack_wallet-android-armeabi-v7a-${VERSION}.apk
           cp build/app/outputs/flutter-apk/app-x86_64-release.apk \
              android-artifacts/stack_wallet-android-x86_64-${VERSION}.apk
+          cp build/app/outputs/bundle/release/app-release.aab \
+             android-artifacts/stack_wallet-android-${VERSION}.aab
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: stack_wallet-android-${{ steps.ver.outputs.version }}
           path: android-artifacts/
@@ -241,10 +222,10 @@ jobs:
 
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.38.1'
+          flutter-version: '3.47.2'
           channel: 'stable'
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.24.13'
 
@@ -252,6 +233,8 @@ jobs:
         run: flutter doctor -v
 
       - name: Configure app
+        env:
+          MWEBD_FETCH: '1'
         run: |
           cd scripts
           echo "yes" | ./build_app.sh \
@@ -281,36 +264,6 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
 
-      # Stack Wallet uses mwebd.exe as a subprocess on Windows, not the FFI
-      # DLL, so we don't need libmwebd.dll. The upstream plugin's Windows
-      # build path requires WSL, which the GitHub runner lacks.
-      - name: Patch flutter_mwebd to skip Windows FFI build (CI workaround)
-        run: |
-          set -euo pipefail
-          cache_root="$(cygpath -u "$LOCALAPPDATA")/Pub/Cache/hosted/pub.dev"
-          plugin_dir=$(find "$cache_root" -maxdepth 1 -type d -name 'flutter_mwebd-*' -print -quit)
-          if [ -z "$plugin_dir" ] || [ ! -f "$plugin_dir/pubspec.yaml" ]; then
-            echo "::error::Could not locate flutter_mwebd in $cache_root"
-            exit 1
-          fi
-          pubspec="$plugin_dir/pubspec.yaml"
-          echo "Patching $pubspec"
-          sed -i '/^      windows:$/,/^        ffiPlugin: true$/d' "$pubspec"
-          flutter pub get
-
-      - name: Create git_versions.dart stubs
-        run: |
-          mkdir -p crypto_plugins/flutter_libepiccash/lib
-          mkdir -p crypto_plugins/flutter_libmwc/lib
-
-          EPIC_TAG=$(git -C crypto_plugins/flutter_libepiccash describe --tags --exact-match HEAD 2>/dev/null || echo "dev")
-          MWC_TAG=$(git -C crypto_plugins/flutter_libmwc describe --tags --exact-match HEAD 2>/dev/null || echo "dev")
-
-          printf 'String getPluginVersion() => "%s";\n' "$EPIC_TAG" \
-            > crypto_plugins/flutter_libepiccash/lib/git_versions.dart
-          printf 'String getPluginVersion() => "%s";\n' "$MWC_TAG" \
-            > crypto_plugins/flutter_libmwc/lib/git_versions.dart
-
       - name: Decode secrets
         env:
           CHANGE_NOW: ${{ secrets.CHANGE_NOW }}
@@ -322,10 +275,16 @@ jobs:
       - name: Build
         run: flutter build windows --release
 
-      - uses: actions/upload-artifact@v4
+      - name: Package
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "build/windows/x64/runner/Release/*" `
+            -DestinationPath "stack_wallet-windows-x86_64-${{ steps.ver.outputs.version }}.zip"
+
+      - uses: actions/upload-artifact@v7
         with:
-          name: stack_wallet-windows-x86_64-${{ steps.ver.outputs.version }}
-          path: build/windows/x64/runner/Release/
+          name: stack_wallet-windows-x86_64-${{ steps.ver.outputs.version }}.zip
+          path: stack_wallet-windows-x86_64-${{ steps.ver.outputs.version }}.zip
 
   build-macos:
     runs-on: macos-latest
@@ -355,10 +314,10 @@ jobs:
 
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.38.1'
+          flutter-version: '3.47.2'
           channel: 'stable'
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.24.13'
 
@@ -372,19 +331,6 @@ jobs:
 
       - name: Get dependencies
         run: flutter pub get
-
-      - name: Create git_versions.dart stubs
-        run: |
-          mkdir -p crypto_plugins/flutter_libepiccash/lib
-          mkdir -p crypto_plugins/flutter_libmwc/lib
-
-          EPIC_TAG=$(git -C crypto_plugins/flutter_libepiccash describe --tags --exact-match HEAD 2>/dev/null || echo "dev")
-          MWC_TAG=$(git -C crypto_plugins/flutter_libmwc describe --tags --exact-match HEAD 2>/dev/null || echo "dev")
-
-          printf 'String getPluginVersion() => "%s";\n' "$EPIC_TAG" \
-            > crypto_plugins/flutter_libepiccash/lib/git_versions.dart
-          printf 'String getPluginVersion() => "%s";\n' "$MWC_TAG" \
-            > crypto_plugins/flutter_libmwc/lib/git_versions.dart
 
       - name: Decode secrets
         env:
@@ -400,9 +346,9 @@ jobs:
           zip -r "$GITHUB_WORKSPACE/stack_wallet-macos-aarch64-${{ steps.ver.outputs.version }}.zip" \
             "Stack Wallet.app"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
-          name: stack_wallet-macos-aarch64-${{ steps.ver.outputs.version }}
+          name: stack_wallet-macos-aarch64-${{ steps.ver.outputs.version }}.zip
           path: stack_wallet-macos-aarch64-${{ steps.ver.outputs.version }}.zip
 
   build-ios:
@@ -438,10 +384,10 @@ jobs:
 
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.38.1'
+          flutter-version: '3.47.2'
           channel: 'stable'
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.24.13'
 
@@ -455,19 +401,6 @@ jobs:
 
       - name: Get dependencies
         run: flutter pub get
-
-      - name: Create git_versions.dart stubs
-        run: |
-          mkdir -p crypto_plugins/flutter_libepiccash/lib
-          mkdir -p crypto_plugins/flutter_libmwc/lib
-
-          EPIC_TAG=$(git -C crypto_plugins/flutter_libepiccash describe --tags --exact-match HEAD 2>/dev/null || echo "dev")
-          MWC_TAG=$(git -C crypto_plugins/flutter_libmwc describe --tags --exact-match HEAD 2>/dev/null || echo "dev")
-
-          printf 'String getPluginVersion() => "%s";\n' "$EPIC_TAG" \
-            > crypto_plugins/flutter_libepiccash/lib/git_versions.dart
-          printf 'String getPluginVersion() => "%s";\n' "$MWC_TAG" \
-            > crypto_plugins/flutter_libmwc/lib/git_versions.dart
 
       - name: Decode secrets
         env:
@@ -483,34 +416,7 @@ jobs:
           cp -r build/ios/iphoneos/Runner.app Payload/
           zip -r "stack_wallet-ios-aarch64-${{ steps.ver.outputs.version }}.ipa" Payload/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
-          name: stack_wallet-ios-aarch64-${{ steps.ver.outputs.version }}
+          name: stack_wallet-ios-aarch64-${{ steps.ver.outputs.version }}.ipa
           path: stack_wallet-ios-aarch64-${{ steps.ver.outputs.version }}.ipa
-
-  release:
-    if: github.ref_type == 'tag'
-    needs: [build-linux, build-android, build-windows, build-macos, build-ios]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Package artifacts
-        run: |
-          mkdir -p release-files
-          for dir in artifacts/stack_wallet-windows-*/; do
-            [ -d "$dir" ] || continue
-            name=$(basename "$dir")
-            (cd "$dir" && zip -r "../../release-files/${name}.zip" .)
-          done
-          find artifacts/ \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.ipa" \) -mindepth 2 -exec mv {} release-files/ \;
-          find artifacts/ -name "*.apk" -mindepth 2 -exec mv {} release-files/ \;
-
-      - uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
-          files: release-files/*
